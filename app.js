@@ -318,11 +318,11 @@ async function syncFromExcel({ silent = false } = {}) {
     return false;
   }
   try {
-    // Essaie d'abord la route serveur locale, puis le fichier embarqué (GitHub Pages)
-    let resp = await fetch('planif.xlsx', { cache: 'no-cache' }).catch(() => null);
-    if (!resp || !resp.ok) {
-      resp = await fetch('data/planif.xlsx', { cache: 'no-cache' }).catch(() => null);
-    }
+    // En prod (GitHub Pages) le xlsx est dans /data/. En local serve.ps1 a une route /planif.xlsx.
+    // On détecte selon le hostname pour éviter un 404 visible dans la console.
+    const isLocal = ['localhost', '127.0.0.1'].includes(location.hostname);
+    const url = isLocal ? 'planif.xlsx' : 'data/planif.xlsx';
+    const resp = await fetch(url, { cache: 'no-cache' }).catch(() => null);
     if (!resp || !resp.ok) throw new Error('xlsx introuvable');
     const buf = await resp.arrayBuffer();
     const wb = XLSX.read(buf, { cellDates: false });
@@ -4058,6 +4058,19 @@ document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') softRefresh();
 });
 window.addEventListener('focus', softRefresh);
+
+// Vérification périodique : si minuit est passé pendant que l'app est ouverte
+// (par exemple tu laisses la page wellness affichée toute la nuit), on re-render.
+setInterval(() => {
+  const todayISO = toISO(new Date());
+  if (todayISO !== lastFocusISO) {
+    lastFocusISO = todayISO;
+    const active = $('.nav-item.active')?.dataset.view || 'dashboard';
+    render(active);
+    scheduleReminder();
+    toast('🌅 Nouveau jour — la date a été actualisée');
+  }
+}, 60_000); // toutes les minutes
 // synchronise les fenêtres ouvertes en parallèle
 window.addEventListener('storage', e => {
   if (e.key === STORAGE_KEY) {
