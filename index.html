@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Coach Maman - Suivi d'entraînement</title>
+<meta name="theme-color" content="#1a1f2e">
+<link rel="manifest" href="manifest.json">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="apple-touch-icon" href="icon.svg">
+<link rel="stylesheet" href="styles.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+</head>
+<body>
+
+<aside class="sidebar">
+  <div class="brand">
+    <div class="logo">CM</div>
+    <div>
+      <div class="brand-title">Coach Maman</div>
+      <div class="brand-sub">Préparation physique</div>
+    </div>
+  </div>
+
+  <div class="athlete-switcher" id="athleteSwitcher"></div>
+
+  <nav class="nav">
+    <button class="nav-item active" data-view="dashboard"><span class="nav-ico">◐</span><span class="lbl-long">Tableau de bord</span><span class="lbl-short">Accueil</span></button>
+    <button class="nav-item" data-view="planning"><span class="nav-ico">▦</span><span class="lbl-long">Planification</span><span class="lbl-short">Plan</span></button>
+    <button class="nav-item" data-view="sessions"><span class="nav-ico">⟳</span><span class="lbl-long">Séances</span><span class="lbl-short">Séances</span></button>
+    <button class="nav-item" data-view="imports"><span class="nav-ico">📥</span><span class="lbl-long">Imports Garmin</span><span class="lbl-short">Imports</span></button>
+    <button class="nav-item" data-view="compare"><span class="nav-ico">⇄</span><span class="lbl-long">Comparaison</span><span class="lbl-short">Compare</span></button>
+    <button class="nav-item" data-view="wellness"><span class="nav-ico">♥</span><span class="lbl-long">Wellness</span><span class="lbl-short">Wellness</span></button>
+    <button class="nav-item" data-view="records"><span class="nav-ico">★</span><span class="lbl-long">Records (PR)</span><span class="lbl-short">Records</span></button>
+    <button class="nav-item" data-view="settings"><span class="nav-ico">⚙</span><span class="lbl-long">Paramètres</span><span class="lbl-short">Réglages</span></button>
+  </nav>
+
+  <div class="sidebar-foot">
+    <div class="profile-card" id="profileCard">
+      <div class="avatar" id="profileAvatar">M</div>
+      <div style="flex:1;min-width:0">
+        <div class="prof-name" id="profileName">Maman</div>
+        <div class="prof-sub" id="profileSub">53 ans · Aide-soignante</div>
+      </div>
+    </div>
+    <div class="coach-toggle" id="coachToggle">
+      <span>Mode coach</span>
+      <label class="switch"><input type="checkbox" id="coachSwitch"><span class="slider"></span></label>
+    </div>
+  </div>
+</aside>
+
+<main class="main">
+  <header class="topbar">
+    <div>
+      <h1 id="pageTitle">Tableau de bord</h1>
+      <p class="page-sub" id="pageSub">Vue d'ensemble de la préparation</p>
+    </div>
+    <div class="topbar-actions">
+      <button class="btn btn-ghost" id="homeBtn" title="Retour à l'accueil">🏠 Accueil</button>
+      <button class="btn btn-ghost" id="installBtn" hidden title="Installer l'app">⬇ Installer</button>
+      <button class="btn btn-ghost" id="importBtn" title="Importer sauvegarde">↑ Import</button>
+      <input type="file" id="importFile" accept="application/json" hidden>
+      <button class="btn btn-primary" id="quickWellness">+ Wellness du jour</button>
+    </div>
+  </header>
+
+  <section id="view-dashboard" class="view active"></section>
+  <section id="view-planning" class="view"></section>
+  <section id="view-sessions" class="view"></section>
+  <section id="view-imports" class="view"></section>
+  <section id="view-compare" class="view"></section>
+  <section id="view-wellness" class="view"></section>
+  <section id="view-records" class="view"></section>
+  <section id="view-settings" class="view"></section>
+</main>
+
+<div id="modal" class="modal-overlay" hidden>
+  <div class="modal-card">
+    <button class="modal-close" id="modalClose">×</button>
+    <div id="modalBody"></div>
+  </div>
+</div>
+
+<div id="toast" class="toast" hidden></div>
+
+<div id="globalDrop" class="global-drop" hidden>
+  <div class="global-drop-card">
+    <div class="gd-ico">📥</div>
+    <div class="gd-title">Lâche les fichiers ici</div>
+    <div class="gd-sub">.GPX · .TCX · .FIT · .CSV · .ZIP · photos · sauvegarde JSON<br>tout est trié automatiquement</div>
+  </div>
+</div>
+
+<script src="data/exercises.js"></script>
+<script src="data/plan-template.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
