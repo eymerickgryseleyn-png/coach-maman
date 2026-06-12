@@ -72,6 +72,9 @@ function loadState() {
   } catch { return defaultState(); }
 }
 function saveState() {
+  // Marque l'athlète courant avec la date de modif locale
+  const a = state.athletes?.[state.currentAthleteId];
+  if (a) a._lastModTs = Date.now();
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
   } catch (e) {
@@ -156,6 +159,15 @@ async function initFirebaseSync() {
     fbState.auth = window.__fb.getAuth(fbState.app);
     await window.__fb.signInAnonymously(fbState.auth);
     fbState.db = window.__fb.getFirestore(fbState.app);
+    // Stamp toutes les athlètes locaux avec un ts si manquant
+    // (protège les données locales contre un cloud obsolète au 1er démarrage)
+    let stamped = false;
+    Object.values(state.athletes).forEach(a => {
+      if (!a._lastModTs) { a._lastModTs = Date.now(); stamped = true; }
+    });
+    if (stamped) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); } catch {}
+    }
     startCloudListeners();
     setCloudStatus('live');
   } catch (e) {
@@ -181,8 +193,17 @@ function listenAthlete(athleteId) {
     if (!data || !data.athlete) return;
     // Ignore les snapshots venant de NOTRE propre écriture
     if (data.writerId === fbState.writerId) return;
-    // Applique seulement si plus récent que notre dernière écriture connue
-    state.athletes[athleteId] = data.athlete;
+    // Compare timestamps : n'applique que si la version cloud est PLUS RÉCENTE que la locale
+    const cloudTs = +data.ts || 0;
+    const localTs = +(state.athletes[athleteId]?._lastModTs) || 0;
+    if (cloudTs <= localTs) {
+      // Cloud plus ancien → push notre version pour rattraper
+      console.log('[sync] cloud version older, pushing local');
+      cloudPushDebounced();
+      return;
+    }
+    // Préserve la dernière modif locale + applique la version cloud
+    state.athletes[athleteId] = { ...data.athlete, _lastModTs: cloudTs };
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {}
@@ -202,16 +223,38 @@ function cloudPushDebounced() {
   cloudPushTimer = setTimeout(cloudPushAll, 800);
 }
 
+// Nettoie un objet pour Firestore : remplace les undefined par null récursivement
+function sanitizeForFirestore(value) {
+  if (value === undefined) return null;
+  if (value === null) return null;
+  if (Array.isArray(value)) return value.map(sanitizeForFirestore);
+  if (typeof value === 'object') {
+    const out = {};
+    for (const k of Object.keys(value)) {
+      const v = sanitizeForFirestore(value[k]);
+      // Saute les fonctions ou objets non sérialisables
+      if (typeof v === 'function') continue;
+      out[k] = v;
+    }
+    return out;
+  }
+  // Number, string, boolean — OK
+  if (typeof value === 'number' && !isFinite(value)) return null;
+  return value;
+}
+
 async function cloudPushAll() {
   if (!fbState.db || !fbState.roomCode) return;
   fbState.lastWriteTs = Date.now();
   try {
     for (const id of Object.keys(state.athletes)) {
       const ref = window.__fb.doc(fbState.db, 'rooms', fbState.roomCode, 'athletes', id);
+      const cleanAthlete = sanitizeForFirestore(state.athletes[id]);
+      const localTs = +state.athletes[id]._lastModTs || fbState.lastWriteTs;
       await window.__fb.setDoc(ref, {
-        athlete: state.athletes[id],
+        athlete: cleanAthlete,
         writerId: fbState.writerId,
-        ts: fbState.lastWriteTs
+        ts: localTs           // ← le ts de la dernière modif locale
       }, { merge: false });
     }
     setCloudStatus('live');
