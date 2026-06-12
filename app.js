@@ -428,7 +428,11 @@ function fmtDateShort(d) {
 }
 function toISO(d) {
   if (!(d instanceof Date)) d = new Date(d);
-  return d.toISOString().slice(0,10);
+  // Utilise les composants LOCAUX (pas UTC) pour éviter le décalage de fuseau horaire
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${day}`;
 }
 function addDays(d, n) {
   const x = new Date(d);
