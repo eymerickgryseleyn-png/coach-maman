@@ -30,6 +30,8 @@
 
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body { height: 100%; }
+/* Aucun débordement horizontal quelle que soit la taille d'écran */
+html, body { max-width: 100%; overflow-x: hidden; }
 body {
   font-family: var(--font);
   background: var(--bg);
@@ -39,6 +41,8 @@ body {
   -webkit-font-smoothing: antialiased;
   display: flex;
 }
+/* Médias et canvas ne dépassent jamais leur conteneur */
+img, canvas, svg, video { max-width: 100%; }
 button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
 input, select, textarea { font-family: inherit; font-size: 14px; }
 
@@ -120,7 +124,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 22px 32px;
+  padding: clamp(14px, 3vw, 22px) clamp(14px, 4vw, 32px);
   background: var(--bg);
   position: sticky;
   top: 0;
@@ -128,7 +132,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   border-bottom: 1px solid transparent;
 }
 .topbar.scrolled { background: rgba(247,248,250,.92); backdrop-filter: blur(10px); border-bottom-color: var(--border); }
-.topbar h1 { font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }
+.topbar h1 { font-size: clamp(18px, 4.5vw, 22px); font-weight: 700; letter-spacing: -0.5px; }
 .page-sub { font-size: 13px; color: var(--text-soft); margin-top: 2px; }
 .topbar-actions { display: flex; gap: 8px; align-items: center; }
 
@@ -154,7 +158,7 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
 .btn-icon { width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; border-radius: 6px; }
 
 /* VIEWS */
-.view { display: none; padding: 8px 32px 40px; }
+.view { display: none; padding: 8px clamp(14px, 4vw, 32px) 40px; }
 .view.active { display: block; }
 
 /* CARDS */
@@ -786,6 +790,63 @@ input:focus, select:focus { outline: none; border-color: var(--accent); }
 .settings-row:last-child { border-bottom: none; }
 .settings-row .label { font-weight: 600; font-size: 13px; }
 .settings-row .sub { font-size: 12px; color: var(--text-mute); margin-top: 2px; }
+
+/* Bloc paramètre vertical (label + sous-texte + champ pleine largeur en dessous) */
+.settings-block {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--border);
+}
+.settings-block:last-child { border-bottom: none; }
+.settings-block .label { font-weight: 600; font-size: 13px; }
+.settings-block .sub { font-size: 12px; color: var(--text-mute); margin-top: 2px; }
+
+/* Champ code de sync : pleine largeur, gros caractères lisibles jusqu'au bout */
+.room-code-input {
+  flex: 1 1 auto;
+  width: 100%;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  text-align: center;
+  padding: 12px 14px !important;
+}
+
+/* Sélecteur de type d'activité (boutons tactiles au lieu d'un <select> tronqué) */
+.type-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.type-chip {
+  flex: 1 1 auto;
+  min-width: 84px;
+  padding: 10px 12px;
+  border: 1.5px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-2);
+  color: var(--text-soft);
+  font-weight: 600;
+  font-size: 14px;
+  text-align: center;
+  cursor: pointer;
+  transition: all .12s ease;
+}
+.type-chip:hover { border-color: var(--text-mute); }
+.type-chip.active {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+}
+/* Accent coloré selon le type quand sélectionné */
+.type-chip.marche.active  { background: var(--accent); border-color: var(--accent); }
+.type-chip.renfo.active   { background: var(--info);   border-color: var(--info); }
+.type-chip.cap.active     { background: var(--purple); border-color: var(--purple); }
+.type-chip.mob.active     { background: var(--warn);   border-color: var(--warn); }
+.type-chip.jujitsu.active { background: var(--danger); border-color: var(--danger); }
 
 /* ATHLETE SWITCHER */
 .athlete-switcher {
@@ -1619,7 +1680,7 @@ body.coach-mode .brand-sub::after { content: ' · COACH'; color: var(--accent); 
   body { flex-direction: column; }
   .sidebar { width: 100%; height: auto; position: sticky; top: 0; padding: 10px 12px; flex-direction: row; align-items: center; gap: 10px; z-index: 20; }
   .brand { border: none; padding: 0; margin: 0; }
-  .nav { flex-direction: row; flex: 1; overflow-x: auto; gap: 4px; }
+  .nav { flex-direction: row; flex: 1; flex-wrap: wrap; justify-content: center; gap: 4px; overflow: visible; }
   .nav-item { white-space: nowrap; padding: 8px 10px; }
   .nav-item span:not(.nav-ico) { display: none; }
   .sidebar-foot { display: none; }
@@ -1631,7 +1692,9 @@ body.coach-mode .brand-sub::after { content: ' · COACH'; color: var(--accent); 
 }
 
 /* ============ RESPONSIVE PHONE ============ */
-@media (max-width: 600px) {
+/* Seuil large (768px) : couvre TOUS les téléphones, y compris les grands Android
+   et les petites tablettes en portrait. Mise en page 100% tactile en dessous. */
+@media (max-width: 768px) {
   /* Barre de navigation EN HAUT, fixe, avec icônes + libellés courts */
   body { flex-direction: column; }
   .sidebar {
@@ -1650,25 +1713,26 @@ body.coach-mode .brand-sub::after { content: ' · COACH'; color: var(--accent); 
     background: #fff;
   }
   .brand, .athlete-switcher, .sidebar-foot { display: none; }
-  /* Nav scroll horizontal pour ne JAMAIS couper d'icône */
+  /* Nav en 2 rangées qui s'enroulent : tous les onglets visibles, rien n'est coupé */
   .nav {
     flex-direction: row;
+    flex-wrap: wrap;
+    justify-content: center;
     gap: 4px;
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    scroll-snap-type: x mandatory;
-    padding: 0 4px;
+    overflow: visible;
+    padding: 0 2px;
+    width: 100%;
   }
   .nav::-webkit-scrollbar { display: none; }
   .nav-item {
-    flex: 0 0 auto;          /* pas de shrink — chaque item garde sa largeur */
+    flex: 1 1 22%;            /* ~4 par rangée → 8 onglets sur 2 rangées */
+    min-width: 0;
+    max-width: 24%;
     flex-direction: column;
     gap: 3px;
-    padding: 8px 10px;
-    min-width: 64px;          /* largeur minimum garantie */
+    padding: 8px 4px;
     font-size: 11px;
     border-radius: 10px;
-    scroll-snap-align: start;
   }
   .nav-item span:not(.nav-ico) {
     display: block;
@@ -1681,9 +1745,14 @@ body.coach-mode .brand-sub::after { content: ' · COACH'; color: var(--accent); 
   .nav-item .lbl-short { display: block !important; }
   .nav-ico { width: 24px; height: 24px; font-size: 20px; }
 
-  /* Plus de padding bas — la nav n'est plus en bas */
-  .main { padding-bottom: 16px; }
-  .view { padding: 0 12px 16px; }
+  /* Plus de padding bas — la nav n'est plus en bas.
+     On respecte les zones sûres (encoche latérale en paysage, barre gestuelle). */
+  .main {
+    padding-bottom: 16px;
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+  .view { padding: 0 12px calc(16px + env(safe-area-inset-bottom)); }
 
   /* Topbar plus compacte */
   .topbar { padding: 12px 14px 10px; gap: 6px; }
@@ -1701,6 +1770,12 @@ body.coach-mode .brand-sub::after { content: ' · COACH'; color: var(--accent); 
 
   /* Grilles → 1 colonne */
   .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr !important; }
+
+  /* Modale : 1 champ par ligne. Les "grid-column: span 2" (Titre/Objectif)
+     recréaient des colonnes implicites qui écrasaient les autres champs
+     (Jour/Type tronqués à 2 lettres). On force chaque champ sur toute la largeur. */
+  #modalBody .grid-2 { grid-template-columns: 1fr !important; }
+  #modalBody .grid-2 > * { grid-column: 1 / -1 !important; }
 
   /* Calendrier semaine : 1 colonne, plus grand */
   .week-cal { grid-template-columns: 1fr; gap: 8px; }

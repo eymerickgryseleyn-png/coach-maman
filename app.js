@@ -218,7 +218,10 @@ function listenAthlete(athleteId) {
 
 let cloudPushTimer = null;
 function cloudPushDebounced() {
-  if (!fbState.enabled || !fbState.db || !fbState.roomCode || fbState.status !== 'live') return;
+  if (!fbState.enabled || !fbState.db || !fbState.roomCode) return;
+  // On pousse si la sync est vivante OU en erreur (pour retenter après un échec
+  // ponctuel), mais pas pendant la connexion initiale.
+  if (fbState.status !== 'live' && fbState.status !== 'error') return;
   clearTimeout(cloudPushTimer);
   cloudPushTimer = setTimeout(cloudPushAll, 800);
 }
@@ -250,6 +253,15 @@ async function cloudPushAll() {
     for (const id of Object.keys(state.athletes)) {
       const ref = window.__fb.doc(fbState.db, 'rooms', fbState.roomCode, 'athletes', id);
       const cleanAthlete = sanitizeForFirestore(state.athletes[id]);
+      // Garde-fou : Firestore limite un document à ~1 Mo. Au-delà, setDoc échoue
+      // et bloquait toute la sync sans rien dire. On prévient clairement.
+      const approxSize = JSON.stringify(cleanAthlete).length;
+      if (approxSize > 1000000) {
+        const ko = Math.round(approxSize / 1024);
+        setCloudStatus('error', `Données trop volumineuses (${ko} Ko > limite ~1 Mo)`);
+        toast(`⚠ Sync impossible : ${ko} Ko dépassent la limite Firestore (1 Mo). Réduis les photos / imports.`);
+        return;
+      }
       const localTs = +state.athletes[id]._lastModTs || fbState.lastWriteTs;
       await window.__fb.setDoc(ref, {
         athlete: cleanAthlete,
@@ -261,6 +273,7 @@ async function cloudPushAll() {
   } catch (e) {
     console.error('cloud push error:', e);
     setCloudStatus('error', e.message);
+    toast('⚠ Échec synchro cloud : ' + (e.message || 'erreur inconnue'));
   }
 }
 
@@ -439,16 +452,48 @@ function addDays(d, n) {
   x.setDate(x.getDate() + n);
   return x;
 }
-function weekStartDate(weekIndex) { return addDays(A().startDate, weekIndex * 7); }
+// Parse une date "yyyy-mm-dd" en heure LOCALE (évite le décalage UTC d'une journée)
+function parseLocalDate(v) {
+  if (v instanceof Date) return v;
+  if (typeof v === 'string') {
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return new Date(+m[1], +m[2] - 1, +m[3]);
+  }
+  return new Date(v);
+}
+// Début (lundi) d'une semaine : on privilégie la date PROPRE de la semaine
+// (issue de l'Excel) pour rester aligné avec les numéros de semaine calendaires.
+// Fallback : startDate global + index×7 (anciens plans sans dates par semaine).
+function weekStartDate(weekIndex) {
+  const wk = A().weeks?.[weekIndex];
+  if (wk && wk.startDate) {
+    const d = parseLocalDate(wk.startDate);
+    if (!isNaN(d)) return d;
+  }
+  return addDays(parseLocalDate(A().startDate), weekIndex * 7);
+}
 function weekRange(weekIndex) {
   const start = weekStartDate(weekIndex);
   return { start, end: addDays(start, 6) };
 }
+// Semaine en cours = la dernière semaine dont la date de début est <= aujourd'hui.
+// Utilise les dates propres de chaque semaine si elles existent (plan Excel),
+// pour que le dashboard, la planification et les séances pointent TOUS la même semaine.
 function currentWeekIndex() {
-  const start = new Date(A().startDate);
-  const today = new Date();
+  const weeks = A().weeks || [];
+  if (!weeks.length) return 0;
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  if (weeks.some(w => w.startDate)) {
+    let idx = 0;
+    for (let i = 0; i < weeks.length; i++) {
+      const s = weekStartDate(i); s.setHours(0, 0, 0, 0);
+      if (s.getTime() <= today.getTime()) idx = i; else break;
+    }
+    return idx;
+  }
+  const start = parseLocalDate(A().startDate);
   const diff = Math.floor((today - start) / 86400000);
-  return Math.max(0, Math.min(A().weeks.length - 1, Math.floor(diff / 7)));
+  return Math.max(0, Math.min(weeks.length - 1, Math.floor(diff / 7)));
 }
 const DAYS_FR = ['Lundi','Mardi','Mercredi','Jeudi','Vendredi','Samedi','Dimanche'];
 
@@ -673,7 +718,7 @@ function renderDashboard() {
       <div class="kpi">
         <div class="kpi-bar"></div>
         <div class="kpi-label">Semaine en cours</div>
-        <div class="kpi-value">${wi+1}<span style="font-size:14px;color:var(--text-mute)"> / ${A().weeks.length}</span></div>
+        <div class="kpi-value">S${wk.n}<span style="font-size:14px;color:var(--text-mute)"> · ${wi+1}/${A().weeks.length}</span></div>
         <div class="kpi-sub">${fmtDateShort(start)} → ${fmtDateShort(end)}</div>
       </div>
       <div class="kpi info">
@@ -890,19 +935,27 @@ const ACTIVITY_COLORS = {
   'Autre':        { bg: 'rgba(150, 150, 150, 0.85)', border: '#909090' }
 };
 
-// Normalise un nom de sport vers une catégorie connue
-function activityCategory(sport, type) {
-  const s = (sport||type||'').toString().toLowerCase();
-  if (/marche|walk/.test(s)) return 'Marche';
-  if (/course|run|cap/.test(s)) return 'Course';
+// Classe UNE chaîne (sport ou type) vers une catégorie connue, ou null si inconnue
+function categoryOf(str) {
+  const s = (str || '').toString().toLowerCase();
+  if (!s) return null;
+  if (/marche|walk|hik|rando/.test(s)) return 'Marche';
+  if (/course|run|cap|jog/.test(s) && !/parcours/.test(s)) return 'Course';
   if (/trail/.test(s)) return 'Trail';
-  if (/v[eé]lo|cycl|bike/.test(s)) return 'Vélo';
+  if (/v[eé]lo|cycl|bike|vtt|ride/.test(s)) return 'Vélo';
   if (/natat|swim/.test(s)) return 'Natation';
-  if (/renfo|muscu|strength|force/.test(s)) return 'Renfo';
-  if (/mobil|yoga|stretch/.test(s)) return 'Mobilité';
+  if (/renfo|muscu|strength|force|gym|weight/.test(s)) return 'Renfo';
+  if (/mobil|yoga|stretch|pilate/.test(s)) return 'Mobilité';
   if (/juju|jiu|bjj/.test(s)) return 'Jujitsu';
   if (/comp[eé]tit|race/.test(s)) return 'Compétition';
-  return 'Autre';
+  return null; // inconnu (ex : TCX "Other")
+}
+
+// Catégorie d'une activité réalisée. On essaie d'abord le sport déclaré par le
+// fichier (Garmin), puis — s'il est inconnu/"Other" — on retombe sur le TYPE de
+// la séance planifiée (ex : Marche). Ainsi un TCX/GPX prend la vraie couleur.
+function activityCategory(sport, type) {
+  return categoryOf(sport) || categoryOf(type) || 'Autre';
 }
 
 function drawDistanceChart() {
@@ -1993,6 +2046,20 @@ function parseCSV(text) {
   }
 
   if (best.score < 0 || best.idx.date == null) {
+    // Cas fréquent : l'utilisateur a fait "Exporter l'intervalle" (les tours/splits
+    // d'UNE activité). Ce fichier n'a PAS de colonne date, c'est normal.
+    const isSplits = best.header.some(h =>
+      /^intervalle|^tour\b|^lap\b|^split|^fractionn|^r[eé]capitulatif/.test(h));
+    if (isSplits) {
+      throw new Error(
+        `Ce fichier est un export des TOURS / INTERVALLES d'une seule activité — ` +
+        `il ne contient aucune date, donc impossible de le rattacher à une séance.\n\n` +
+        `➡ Pour importer cette activité : sur Garmin Connect, ouvre l'activité → ⚙ → ` +
+        `"Exporter en .TCX" (ou .GPX) et glisse ce fichier ici.\n` +
+        `➡ Pour importer tout ton historique d'un coup : page "Activités" (liste) → ` +
+        `menu ⋯ en haut → "Exporter au format CSV".`
+      );
+    }
     // Aperçu pour diagnostic
     const preview = rows.slice(0, 4).map((r, i) => `Ligne ${i+1}: ${r.slice(0, 6).join(' | ')}${r.length>6?' …':''}`).join('\n');
     throw new Error(
@@ -2386,10 +2453,11 @@ function renderImportList() {
       </div>`;
     }
     if (item.status === 'error') {
+      const safeErr = (item.error || 'Erreur inconnue').replace(/</g, '&lt;');
       return `<div class="imp-item error" data-id="${item.id}">
         <div>
           <div class="imp-name">${item.name}</div>
-          <div class="imp-meta"><span style="color:var(--danger)">❌ ${item.error}</span></div>
+          <div class="imp-meta"><span style="color:var(--danger);white-space:pre-line;display:block;line-height:1.5">❌ ${safeErr}</span></div>
         </div>
         <div></div>
         <div><button class="btn-icon" data-rm="${item.id}" title="Retirer">×</button></div>
@@ -2628,10 +2696,14 @@ function openSessionEditor(globalIdx, wIdx, dayIdx) {
     <div class="modal-title">${isNew?'Nouvelle séance':'Modifier la séance'}</div>
     <div class="modal-sub">Semaine ${A().weeks[s.week-1]?.n ?? s.week} · ${DAYS_FR[s.day-1]}</div>
 
-    <div class="grid grid-2">
-      <div><label class="text-mute">Type</label>
-        <select id="seType">${TYPES_SEANCE.map(t => `<option ${t===s.type?'selected':''}>${t}</option>`).join('')}</select>
+    <div style="margin-bottom:14px"><label class="text-mute">Type d'activité</label>
+      <div class="type-picker" id="seTypePicker">
+        ${TYPES_SEANCE.map(t => `<button type="button" class="type-chip ${typeClass(t)} ${t===s.type?'active':''}" data-type="${t}">${t}</button>`).join('')}
       </div>
+      <input type="hidden" id="seType" value="${s.type}">
+    </div>
+
+    <div class="grid grid-2">
       <div><label class="text-mute">Jour</label>
         <select id="seDay">${DAYS_FR.map((d,i) => `<option value="${i+1}" ${i+1===s.day?'selected':''}>${d}</option>`).join('')}</select>
       </div>
@@ -2672,9 +2744,15 @@ function openSessionEditor(globalIdx, wIdx, dayIdx) {
     </div>
   `, () => {
     $('#seCancel').addEventListener('click', closeModal);
-    // Affiche/masque le bloc Renfo selon le type
-    $('#seType').addEventListener('change', e => {
-      $('#seRenfoBlock').style.display = e.target.value === 'Renfo' ? '' : 'none';
+    // Sélecteur de type en boutons (lisible, tactile). Met à jour l'input caché
+    // + affiche/masque le bloc Renfo.
+    $$('#seTypePicker .type-chip').forEach(chip => {
+      chip.addEventListener('click', () => {
+        $$('#seTypePicker .type-chip').forEach(c => c.classList.remove('active'));
+        chip.classList.add('active');
+        $('#seType').value = chip.dataset.type;
+        $('#seRenfoBlock').style.display = chip.dataset.type === 'Renfo' ? '' : 'none';
+      });
     });
 
     // === Liste dynamique d'exercices renfo ===
@@ -3193,7 +3271,11 @@ function computeAutoRecords() {
       rpe: +d.rpe || null, load: trainingLoad(d.rpe, d.duree),
       source: d.source || null,
       sport: plannedType,
-      activity: normalizeActivity(d.sport || plannedType)
+      // sport déclaré par le fichier en priorité ; s'il est inconnu ("Other"), on
+      // retombe sur le type de la séance planifiée pour ne pas tout classer "Autre"
+      activity: normalizeActivity(d.sport) !== 'Autre'
+        ? normalizeActivity(d.sport)
+        : normalizeActivity(plannedType)
     });
   });
 
@@ -3543,14 +3625,12 @@ function renderSettings() {
           </div>
         </div>
       ` : `
-        <div class="settings-row">
-          <div>
-            <div class="label">Code de pair (room code)</div>
-            <div class="sub">Code partagé entre ton téléphone et celui de ta mère. Tu le génères une fois et tu le tapes sur les 2 appareils.</div>
-          </div>
-          <div class="row" style="gap:6px;align-items:center">
-            <input type="text" id="cloudRoomCode" value="${fbState.roomCode||''}" placeholder="ex : ABCD2345EF" style="max-width:160px;text-transform:uppercase;letter-spacing:1px;font-family:ui-monospace,monospace">
-            <button class="btn btn-ghost btn-sm" id="cloudGenCode" title="Générer un nouveau code">🎲</button>
+        <div class="settings-block">
+          <div class="label">Code de pair (room code)</div>
+          <div class="sub">Code partagé entre ton téléphone et celui de ta mère. Génère-le une fois et tape-le <strong>à l'identique</strong> sur les 2 appareils.</div>
+          <div class="row" style="gap:8px;align-items:center;margin-top:10px">
+            <input type="text" id="cloudRoomCode" class="room-code-input" value="${fbState.roomCode||''}" placeholder="ex : ABCD2345EF" autocomplete="off" autocapitalize="characters" autocorrect="off" spellcheck="false">
+            <button class="btn btn-ghost" id="cloudGenCode" title="Générer un nouveau code" style="flex:0 0 auto;min-width:48px">🎲</button>
           </div>
         </div>
         <div class="settings-row">
