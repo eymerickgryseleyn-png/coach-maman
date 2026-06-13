@@ -202,8 +202,21 @@ function listenAthlete(athleteId) {
       cloudPushDebounced();
       return;
     }
-    // Préserve la dernière modif locale + applique la version cloud
-    state.athletes[athleteId] = { ...data.athlete, _lastModTs: cloudTs };
+    // Applique la version cloud MAIS le cloud ne doit JAMAIS écraser le plan
+    // (weeks/startDate) si l'appareil a déjà un plan issu de l'Excel. Le plan vient
+    // toujours de l'Excel via syncFromExcel() sur chaque appareil. Sans ça, un vieux
+    // plan resté dans le cloud réinjecte de mauvaises semaines (toutes en
+    // "compétition/affutage") par-dessus la lecture Excel.
+    const localA = state.athletes[athleteId] || {};
+    const localFromExcel = Array.isArray(localA.weeks) && localA.weeks.some(w => w && w.startDate);
+    const merged = { ...data.athlete, _lastModTs: cloudTs };
+    if (localFromExcel) {            // plan Excel local prioritaire
+      merged.weeks = localA.weeks;
+      if (localA.startDate) merged.startDate = localA.startDate;
+    }
+    // sinon (appareil neuf, pas encore de plan Excel) : on garde les weeks du cloud
+    // le temps que syncFromExcel() s'exécute et affine.
+    state.athletes[athleteId] = merged;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
     } catch {}
