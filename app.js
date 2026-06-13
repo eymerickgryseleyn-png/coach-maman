@@ -366,20 +366,33 @@ async function syncFromExcel({ silent = false } = {}) {
     const weekRow = grid[ROW_WEEKNUM] || [];
     const dateRow = grid[ROW_DATE] || [];
 
-    // Propagation des cellules fusionnées vers la droite
-    const propagate = (row) => {
-      const out = []; let last = null;
-      for (let i = 0; i < row.length; i++) {
-        const v = row[i];
-        if (v !== null && v !== undefined && v !== '') last = v;
-        out.push(last);
+    // Étend une ligne en respectant les VRAIES fusions de cellules de l'Excel,
+    // SANS propager au-delà de la dernière cellule réellement remplie.
+    // (Avant, on recopiait la dernière valeur jusqu'au bout : les semaines non
+    //  planifiées héritaient à tort de la dernière phase « compétition/affutage ».)
+    const merges = sheet['!merges'] || [];
+    const expandRow = (rowIdx) => {
+      const row = grid[rowIdx] || [];
+      const out = [];
+      for (let c = 0; c < row.length; c++) {
+        const v = row[c];
+        out[c] = (v === null || v === undefined || v === '') ? null : v;
       }
+      // Applique chaque fusion horizontale qui couvre cette ligne
+      merges.forEach(m => {
+        if (m.s.r <= rowIdx && rowIdx <= m.e.r) {
+          const anchor = (grid[m.s.r] || [])[m.s.c];
+          if (anchor !== null && anchor !== undefined && anchor !== '') {
+            for (let c = m.s.c; c <= m.e.c; c++) out[c] = anchor;
+          }
+        }
+      });
       return out;
     };
-    const macroP = propagate(grid[ROW_MACRO] || []);
-    const mesoP = propagate(grid[ROW_MESO] || []);
-    const microP = propagate(grid[ROW_MICRO] || []);
-    const qualP = propagate(grid[ROW_QUAL] || []);
+    const macroP = expandRow(ROW_MACRO);
+    const mesoP = expandRow(ROW_MESO);
+    const microP = expandRow(ROW_MICRO);
+    const qualP = expandRow(ROW_QUAL);
 
     // Conversion date série Excel -> ISO yyyy-mm-dd
     const excelDateToISO = (v) => {
@@ -401,13 +414,16 @@ async function syncFromExcel({ silent = false } = {}) {
       if (n === null || n === undefined || n === '') continue;
       const startISO = excelDateToISO(dateRow[col]);
       if (!firstDate && startISO) firstDate = startISO;
+      // Si une phase n'est pas définie dans l'Excel pour cette semaine, on laisse
+      // VIDE (pas de valeur inventée) : la vue affichera « — » et l'utilisateur
+      // saura qu'il reste à planifier ces semaines dans l'Excel.
       newWeeks.push({
         n: Number(n) || (col - 1),
         startDate: startISO,
-        macro: macroP[col] || 'Période de préparation',
-        meso: mesoP[col] || 'Préparation spécifique',
-        micro: microP[col] || 'Développement',
-        quality: qualP[col] || 'Capacité aérobie',
+        macro: macroP[col] || '',
+        meso: mesoP[col] || '',
+        micro: microP[col] || '',
+        quality: qualP[col] || '',
         note: ''
       });
     }
@@ -737,8 +753,8 @@ function renderDashboard() {
       <div class="kpi info">
         <div class="kpi-bar"></div>
         <div class="kpi-label">Mésocycle</div>
-        <div class="kpi-value" style="font-size:18px">${wk.meso}</div>
-        <div class="kpi-sub">Micro : ${wk.micro}</div>
+        <div class="kpi-value" style="font-size:18px">${wk.meso || 'À planifier'}</div>
+        <div class="kpi-sub">Micro : ${wk.micro || '—'}</div>
       </div>
       <div class="kpi ${acwr.color}">
         <div class="kpi-bar"></div>
@@ -792,7 +808,7 @@ function renderDashboard() {
       </div>
     </div>
 
-    <h3 class="section-title">Semaine en cours · ${wk.macro}</h3>
+    <h3 class="section-title">Semaine en cours · ${wk.macro || 'Phase à planifier'}</h3>
     ${renderWeekCalendar(wi)}
   `;
 
