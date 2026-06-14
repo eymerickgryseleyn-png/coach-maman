@@ -210,12 +210,21 @@ function listenAthlete(athleteId) {
     const localA = state.athletes[athleteId] || {};
     const localFromExcel = Array.isArray(localA.weeks) && localA.weeks.some(w => w && w.startDate);
     const merged = { ...data.athlete, _lastModTs: cloudTs };
-    if (localFromExcel) {            // plan Excel local prioritaire
+    if (localFromExcel) {
       merged.weeks = localA.weeks;
       if (localA.startDate) merged.startDate = localA.startDate;
     }
-    // sinon (appareil neuf, pas encore de plan Excel) : on garde les weeks du cloud
-    // le temps que syncFromExcel() s'exécute et affine.
+    // Fusionne les sessions : union par clé unique (date+type+distance+durée)
+    // pour ne jamais perdre de données quand un appareil vide se connecte.
+    const localSessions = Array.isArray(localA.sessions) ? localA.sessions : [];
+    const cloudSessions = Array.isArray(merged.sessions) ? merged.sessions : [];
+    if (localSessions.length > 0 || cloudSessions.length > 0) {
+      const sessionKey = s => `${s.date||''}_${s.type||''}_${s.distance||0}_${s.duree||0}_${s.week||0}_${s.day||0}`;
+      const map = new Map();
+      localSessions.forEach(s => map.set(sessionKey(s), s));
+      cloudSessions.forEach(s => { const k = sessionKey(s); if (!map.has(k)) map.set(k, s); });
+      merged.sessions = [...map.values()];
+    }
     state.athletes[athleteId] = merged;
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(state));

@@ -2,7 +2,7 @@
 // Stratégie : Network-First pour les fichiers locaux (toujours à jour),
 // Cache-First pour les libs CDN (rarement changent, économie de bande).
 
-const VERSION = 'v4-' + Date.now();
+const VERSION = 'v5-' + Date.now();
 const CACHE = 'coachmaman-' + VERSION;
 
 const LOCAL_ASSETS = [
