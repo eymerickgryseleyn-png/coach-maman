@@ -234,6 +234,7 @@ function listenAthlete(athleteId) {
       merged.weeks = localA.weeks;
       if (localA.startDate) merged.startDate = localA.startDate;
     }
+    // Fusion sessions (union par clé unique)
     const localSessions = Array.isArray(localA.sessions) ? localA.sessions : [];
     const cloudSessions = Array.isArray(merged.sessions) ? merged.sessions : [];
     if (localSessions.length > 0 || cloudSessions.length > 0) {
@@ -244,6 +245,36 @@ function listenAthlete(athleteId) {
       cloudSessions.forEach(s => { const k = sessionKey(s); if (!map.has(k)) { map.set(k, s); newCount++; } });
       merged.sessions = [...map.values()];
       if (newCount > 0) notifyNewSession(newCount);
+    }
+    // Fusion wellness (union par date, version la plus complète gagne)
+    const localWellness = Array.isArray(localA.wellness) ? localA.wellness : [];
+    const cloudWellness = Array.isArray(merged.wellness) ? merged.wellness : [];
+    if (localWellness.length > 0 || cloudWellness.length > 0) {
+      const wmap = new Map();
+      localWellness.forEach(w => wmap.set(w.date, w));
+      cloudWellness.forEach(w => {
+        const existing = wmap.get(w.date);
+        if (!existing) { wmap.set(w.date, w); }
+        else {
+          const eKeys = Object.keys(existing).length;
+          const cKeys = Object.keys(w).length;
+          if (cKeys > eKeys) wmap.set(w.date, w);
+        }
+      });
+      merged.wellness = [...wmap.values()].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+    }
+    // Fusion done (union des clés, garde la version avec le plus de données)
+    const localDone = localA.done || {};
+    const cloudDone = merged.done || {};
+    merged.done = { ...cloudDone, ...localDone };
+    // Fusion records (union par clé exercise+date)
+    const localRecords = Array.isArray(localA.records) ? localA.records : [];
+    const cloudRecords = Array.isArray(merged.records) ? merged.records : [];
+    if (localRecords.length > 0 || cloudRecords.length > 0) {
+      const rmap = new Map();
+      localRecords.forEach(r => rmap.set(`${r.exercise||''}_${r.date||''}`, r));
+      cloudRecords.forEach(r => { const k = `${r.exercise||''}_${r.date||''}`; if (!rmap.has(k)) rmap.set(k, r); });
+      merged.records = [...rmap.values()];
     }
     state.athletes[athleteId] = merged;
     try {
