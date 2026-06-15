@@ -184,6 +184,26 @@ function startCloudListeners() {
   Object.keys(state.athletes).forEach(id => listenAthlete(id));
 }
 
+function notifyNewSession(count) {
+  if (!('Notification' in window)) return;
+  const msg = count === 1
+    ? '🏋️ Nouvelle séance ajoutée — va voir ce qui t\'attend !'
+    : `🏋️ ${count} nouvelles séances — va voir ce qui t'attend !`;
+  if (Notification.permission === 'granted') {
+    if (navigator.serviceWorker?.controller) {
+      navigator.serviceWorker.controller.postMessage({ type: 'notify', title: 'Coach Maman', body: msg, tag: 'new-session' });
+    } else {
+      new Notification('Coach Maman', { body: msg, icon: './icon.svg' });
+    }
+  } else if (Notification.permission !== 'denied') {
+    Notification.requestPermission().then(p => {
+      if (p === 'granted') {
+        new Notification('Coach Maman', { body: msg, icon: './icon.svg' });
+      }
+    });
+  }
+}
+
 function listenAthlete(athleteId) {
   if (!fbState.db || !fbState.roomCode) return;
   const ref = window.__fb.doc(fbState.db, 'rooms', fbState.roomCode, 'athletes', athleteId);
@@ -214,16 +234,16 @@ function listenAthlete(athleteId) {
       merged.weeks = localA.weeks;
       if (localA.startDate) merged.startDate = localA.startDate;
     }
-    // Fusionne les sessions : union par clé unique (date+type+distance+durée)
-    // pour ne jamais perdre de données quand un appareil vide se connecte.
     const localSessions = Array.isArray(localA.sessions) ? localA.sessions : [];
     const cloudSessions = Array.isArray(merged.sessions) ? merged.sessions : [];
     if (localSessions.length > 0 || cloudSessions.length > 0) {
       const sessionKey = s => `${s.date||''}_${s.type||''}_${s.distance||0}_${s.duree||0}_${s.week||0}_${s.day||0}`;
       const map = new Map();
       localSessions.forEach(s => map.set(sessionKey(s), s));
-      cloudSessions.forEach(s => { const k = sessionKey(s); if (!map.has(k)) map.set(k, s); });
+      let newCount = 0;
+      cloudSessions.forEach(s => { const k = sessionKey(s); if (!map.has(k)) { map.set(k, s); newCount++; } });
       merged.sessions = [...map.values()];
+      if (newCount > 0) notifyNewSession(newCount);
     }
     state.athletes[athleteId] = merged;
     try {
@@ -1742,6 +1762,14 @@ function renderSessionListWeek(wIdx) {
         <div class="section-title" style="margin-top:0">Description</div>
         <div class="session-detail">${(s.details||'').replace(/</g,'&lt;') || '<em>Aucun détail</em>'}</div>
         ${z?`<div class="fc-targets"><span class="ftg">Zone ${z.n} ${z.name}</span><span class="ftg">FC ${z.lo}–${z.hi} bpm</span></div>`:''}
+        ${Array.isArray(s.renfoPhotos) && s.renfoPhotos.length ? `
+          <div class="section-title">📷 Photos renfo</div>
+          <div class="renfo-gallery">${s.renfoPhotos.map(p => `
+            <div class="renfo-gallery-item">
+              <img src="${p.src}" loading="lazy">
+              ${p.caption ? `<div class="renfo-caption">${p.caption.replace(/</g,'&lt;')}</div>` : ''}
+            </div>`).join('')}
+          </div>` : ''}
         <div class="section-title">Résultats / Réalisation</div>
         <div id="doneBox-${i}"></div>
       </div>
@@ -2764,11 +2792,10 @@ function openSessionEditor(globalIdx, wIdx, dayIdx) {
 
     <!-- Bloc renforcement, visible uniquement si type=Renfo -->
     <div id="seRenfoBlock" style="${s.type==='Renfo'?'':'display:none'};margin-top:10px;padding:12px;background:var(--surface-2);border-radius:10px;border:1px solid var(--border)">
-      <div class="section-title" style="margin:0 0 10px;font-size:13px;display:flex;align-items:center;justify-content:space-between">
-        <span>💪 Exercices de renforcement</span>
-        <button type="button" class="btn btn-accent btn-sm" id="seAddExercise">+ Ajouter un exercice</button>
-      </div>
-      <div id="seExercisesList"></div>
+      <div class="section-title" style="margin:0 0 10px;font-size:13px">💪 Renforcement — Photos</div>
+      <div id="sePhotosList"></div>
+      <button type="button" class="btn btn-accent btn-sm" id="seAddPhoto" style="margin-top:8px">📷 Ajouter une photo</button>
+      <input type="file" id="sePhotoInput" accept="image/*" style="display:none" multiple>
     </div>
 
     <div style="margin-top:10px"><label class="text-mute">Séance détaillée</label>
@@ -2793,55 +2820,63 @@ function openSessionEditor(globalIdx, wIdx, dayIdx) {
       });
     });
 
-    // === Liste dynamique d'exercices renfo ===
-    // Migration : si l'ancien format avait { sets, reps, charge, exercise } → 1 exercice
-    let exercises = Array.isArray(s.exercises) ? [...s.exercises]
-      : (s.exercise || s.sets || s.reps || s.charge)
-      ? [{ name: s.exercise || '', sets: s.sets || '', reps: s.reps || '', charge: s.charge || '' }]
-      : [];
+    // === Photos renfo (image + légende) ===
+    let renfoPhotos = Array.isArray(s.renfoPhotos) ? [...s.renfoPhotos] : [];
 
-    const renderExercises = () => {
-      if (exercises.length === 0) {
-        $('#seExercisesList').innerHTML = '<div class="text-mute" style="text-align:center;padding:14px 0;font-size:13px">Aucun exercice. Clique sur "+ Ajouter un exercice"</div>';
+    function resizeImage(file, maxW = 800) {
+      return new Promise(resolve => {
+        const reader = new FileReader();
+        reader.onload = e => {
+          const img = new Image();
+          img.onload = () => {
+            const ratio = Math.min(1, maxW / img.width);
+            const canvas = document.createElement('canvas');
+            canvas.width = img.width * ratio;
+            canvas.height = img.height * ratio;
+            canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+            resolve(canvas.toDataURL('image/jpeg', 0.7));
+          };
+          img.src = e.target.result;
+        };
+        reader.readAsDataURL(file);
+      });
+    }
+
+    const renderPhotos = () => {
+      if (renfoPhotos.length === 0) {
+        $('#sePhotosList').innerHTML = '<div class="text-mute" style="text-align:center;padding:14px 0;font-size:13px">Aucune photo. Ajoute des images pour illustrer la séance.</div>';
         return;
       }
-      $('#seExercisesList').innerHTML = exercises.map((ex, i) => `
-        <div class="exo-row" data-i="${i}">
-          <div class="exo-head">
-            <span class="exo-num">${i+1}</span>
-            <input type="text" data-f="name" value="${(ex.name||'').replace(/"/g,'&quot;')}" placeholder="Nom de l'exercice (ex : Squat, SDT KB, Pont fessier...)">
-            <button type="button" class="btn-icon" data-rm="${i}" title="Retirer">×</button>
-          </div>
-          <div class="exo-fields">
-            <div><label class="text-mute">Séries</label><input type="number" data-f="sets" value="${ex.sets||''}" placeholder="4"></div>
-            <div><label class="text-mute">Reps</label><input type="number" data-f="reps" value="${ex.reps||''}" placeholder="12"></div>
-            <div><label class="text-mute">Charge (kg)</label><input type="number" step="0.5" data-f="charge" value="${ex.charge||''}" placeholder="20"></div>
+      $('#sePhotosList').innerHTML = renfoPhotos.map((p, i) => `
+        <div class="renfo-photo-row" data-i="${i}">
+          <div style="display:flex;align-items:flex-start;gap:8px">
+            <img src="${p.src}" style="width:80px;height:80px;object-fit:cover;border-radius:8px;flex-shrink:0">
+            <div style="flex:1;min-width:0">
+              <input type="text" data-cap="${i}" value="${(p.caption||'').replace(/"/g,'&quot;')}" placeholder="Légende (ex : Squat goblet, 3×12)" style="width:100%;font-size:13px">
+            </div>
+            <button type="button" class="btn-icon" data-rmph="${i}" title="Retirer" style="flex-shrink:0;font-size:18px">×</button>
           </div>
         </div>
       `).join('');
-      // wire field updates
-      $$('#seExercisesList .exo-row').forEach(row => {
-        const i = +row.dataset.i;
-        row.querySelectorAll('[data-f]').forEach(input => {
-          input.addEventListener('input', e => {
-            exercises[i][e.target.dataset.f] = e.target.value;
-          });
-        });
-        row.querySelector('[data-rm]').addEventListener('click', () => {
-          exercises.splice(i, 1);
-          renderExercises();
-        });
+      $$('#sePhotosList [data-cap]').forEach(inp => {
+        inp.addEventListener('input', e => { renfoPhotos[+e.target.dataset.cap].caption = e.target.value; });
+      });
+      $$('#sePhotosList [data-rmph]').forEach(btn => {
+        btn.addEventListener('click', () => { renfoPhotos.splice(+btn.dataset.rmph, 1); renderPhotos(); });
       });
     };
-    renderExercises();
-    $('#seAddExercise').addEventListener('click', () => {
-      exercises.push({ name: '', sets: '', reps: '', charge: '' });
-      renderExercises();
-      // focus le dernier nom
-      setTimeout(() => {
-        const lastRow = $$('#seExercisesList .exo-row').pop();
-        lastRow?.querySelector('[data-f="name"]')?.focus();
-      }, 0);
+    renderPhotos();
+
+    $('#seAddPhoto').addEventListener('click', () => $('#sePhotoInput').click());
+    $('#sePhotoInput').addEventListener('change', async e => {
+      const files = [...e.target.files];
+      if (!files.length) return;
+      for (const f of files) {
+        const src = await resizeImage(f);
+        renfoPhotos.push({ src, caption: '' });
+      }
+      renderPhotos();
+      e.target.value = '';
     });
 
     $('#seSave').addEventListener('click', () => {
@@ -2854,22 +2889,7 @@ function openSessionEditor(globalIdx, wIdx, dayIdx) {
         allure: $('#seAllure').value || null
       };
       if (type === 'Renfo') {
-        // Nettoie : ne garde que les exercices avec un nom
-        obj.exercises = exercises
-          .filter(e => (e.name||'').trim())
-          .map(e => ({
-            name: (e.name||'').trim(),
-            sets: +e.sets || null,
-            reps: +e.reps || null,
-            charge: +e.charge || null
-          }));
-        // Pour compat avec le code existant : pose les valeurs du 1er exo
-        if (obj.exercises.length > 0) {
-          obj.exercise = obj.exercises[0].name;
-          obj.sets = obj.exercises[0].sets;
-          obj.reps = obj.exercises[0].reps;
-          obj.charge = obj.exercises[0].charge;
-        }
+        obj.renfoPhotos = renfoPhotos.filter(p => p.src);
       }
       if (isNew) A().sessions.push(obj);
       else A().sessions[globalIdx] = obj;
@@ -4211,6 +4231,9 @@ maybeOnboarding();
 
 // Initialisation Firebase sync (si configurée et activée)
 initFirebaseSync();
+if ('Notification' in window && Notification.permission === 'default') {
+  Notification.requestPermission();
+}
 
 // Auto-sync depuis l'Excel au démarrage (silencieux si offline / pas de fichier)
 syncFromExcel({ silent: true }).then(ok => {

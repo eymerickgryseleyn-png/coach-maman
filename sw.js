@@ -2,7 +2,7 @@
 // Stratégie : Network-First pour les fichiers locaux (toujours à jour),
 // Cache-First pour les libs CDN (rarement changent, économie de bande).
 
-const VERSION = 'v5-' + Date.now();
+const VERSION = 'v6-' + Date.now();
 const CACHE = 'coachmaman-' + VERSION;
 
 const LOCAL_ASSETS = [
@@ -93,7 +93,7 @@ self.addEventListener('message', e => {
       body: e.data.body || 'N\'oublie pas ton wellness du jour',
       icon: './icon.svg',
       badge: './icon.svg',
-      tag: 'wellness-reminder',
+      tag: e.data.tag || 'wellness-reminder',
       requireInteraction: false
     });
   }
