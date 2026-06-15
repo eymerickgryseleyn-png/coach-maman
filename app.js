@@ -3098,13 +3098,26 @@ function renderCompareResult(L, R) {
 }
 
 // ===================== WELLNESS =====================
+let wellnessDateOffset = 0;
+function wellnessSelectedDate() {
+  const d = new Date();
+  d.setDate(d.getDate() + wellnessDateOffset);
+  return toISO(d);
+}
+
 function renderWellness() {
+  const selDate = wellnessSelectedDate();
+  const isToday = wellnessDateOffset === 0;
   $('#view-wellness').innerHTML = `
     <div class="grid grid-2">
       <div class="card">
-        <div class="card-h">
-          <h3>Questionnaire du jour</h3>
-          <span class="tag accent">${toISO(new Date())}</span>
+        <div class="card-h" style="flex-wrap:wrap;gap:8px">
+          <h3>Questionnaire</h3>
+          <div style="display:flex;align-items:center;gap:6px">
+            <button class="btn btn-ghost btn-sm" id="wellPrev" title="Jour précédent">◀</button>
+            <span class="tag accent" id="wellDateLabel">${isToday ? "Aujourd'hui" : fmtDateShort(selDate)} · ${selDate}</span>
+            <button class="btn btn-ghost btn-sm" id="wellNext" title="Jour suivant" ${isToday?'disabled':''}>▶</button>
+          </div>
         </div>
         <div id="wellnessForm"></div>
       </div>
@@ -3116,13 +3129,15 @@ function renderWellness() {
     <h3 class="section-title">Historique</h3>
     <div id="wellnessList"></div>
   `;
+  $('#wellPrev').addEventListener('click', () => { wellnessDateOffset--; renderWellness(); });
+  $('#wellNext').addEventListener('click', () => { if (wellnessDateOffset < 0) { wellnessDateOffset++; renderWellness(); } });
   renderWellnessForm();
   drawWellnessChart();
   renderWellnessList();
 }
 
 function renderWellnessForm() {
-  const today = toISO(new Date());
+  const today = wellnessSelectedDate();
   const cur = A().wellness.find(w => w.date === today) || { date: today };
   const form = $('#wellnessForm');
   form.innerHTML = WELLNESS_QUESTIONS.map(q => `
