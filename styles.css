@@ -678,8 +678,12 @@ img.ae {
   display: grid; gap: 2px; place-items: center;
 }
 .orb-label {
-  font-size: 10px; text-transform: uppercase; letter-spacing: 2px;
+  font-size: 9.5px; text-transform: uppercase; letter-spacing: 1.5px;
   color: var(--text-mute); font-weight: 600;
+  max-width: 90%;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .orb-number {
   display: flex; align-items: baseline;
@@ -771,6 +775,10 @@ img.ae {
   .orb { width: 160px; height: 160px; }
   .orb-int { font-size: 46px; }
   .orb-dec { font-size: 22px; }
+  .orb-label { font-size: 8.5px; letter-spacing: 1px; }
+}
+@media (max-width: 360px) {
+  .orb-label { display: none; }
 }
 
 /* Form questions */
