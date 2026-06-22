@@ -3158,7 +3158,7 @@ function renderWellness() {
 
   const mood = filled ? wellnessMoodLabel(avg) : null;
   $('#view-wellness').innerHTML = `
-    <div class="wellness-hero">
+    <div class="wellness-hero ${filled?'is-filled':'is-empty'}">
       <div class="wellness-hero-bg"></div>
       <div class="wellness-hero-nav">
         <button class="wellness-navbtn" id="wellPrev" aria-label="Jour précédent">‹</button>
@@ -3168,13 +3168,29 @@ function renderWellness() {
         </div>
         <button class="wellness-navbtn" id="wellNext" aria-label="Jour suivant" ${isToday?'disabled':''}>›</button>
       </div>
-      <div class="wellness-hero-main">
+      <div class="wellness-hero-body">
         ${wellnessHeroOrb(avg, filled)}
-      </div>
-      <div class="wellness-hero-foot">
-        ${filled
-          ? `<div class="wellness-mood">${mood.emoji} <span>${mood.text}</span></div>`
-          : `<div class="wellness-status pending">Pas encore de réponse</div>`}
+        <div class="wellness-hero-side">
+          ${filled
+            ? `<div class="wellness-mood">${mood.emoji}<span>${mood.text}</span></div>
+               <div class="wellness-mini-stats">
+                 ${WELLNESS_QUESTIONS.map(q => {
+                   const v = cur[q.id] || 0;
+                   const pct = v ? (v / 5) * 100 : 0;
+                   return `<div class="mini-stat" style="--c:${WELLNESS_COLORS[q.id]}">
+                     <span class="mini-stat-emoji">${v?wellnessEmojiForValue(q.id,v):'·'}</span>
+                     <span class="mini-stat-label">${q.label}</span>
+                     <span class="mini-stat-bar"><span style="width:${pct}%"></span></span>
+                     <span class="mini-stat-val">${v?v.toFixed(1):'—'}</span>
+                   </div>`;
+                 }).join('')}
+               </div>`
+            : `<div class="wellness-empty-prompt">
+                 <div class="wellness-empty-ico">✨</div>
+                 <div class="wellness-empty-title">Pas encore de réponse</div>
+                 <div class="wellness-empty-sub">Remplis le questionnaire ci-dessous pour voir ton score apparaître.</div>
+               </div>`}
+        </div>
       </div>
     </div>
 
@@ -3189,15 +3205,18 @@ function renderWellness() {
     </div>
 
     <div class="card">
-      <div class="card-h"><h3>Heatmap · 30 jours</h3></div>
+      <div class="card-h"><h3>Calendrier · 6 dernières semaines</h3></div>
       <div class="wellness-heatmap" id="wellnessHeatmap"></div>
       <div class="wellness-heatmap-legend">
-        <span>Moins bien</span>
-        <span class="hm-cell" style="background:#ef4444"></span>
-        <span class="hm-cell" style="background:#f97316"></span>
-        <span class="hm-cell" style="background:#f59e0b"></span>
-        <span class="hm-cell" style="background:#10b981"></span>
-        <span>Au top</span>
+        <span class="hm-leg-lbl">Moins bien</span>
+        <span class="hm-leg-cell" style="background:#ef4444"></span>
+        <span class="hm-leg-cell" style="background:#f97316"></span>
+        <span class="hm-leg-cell" style="background:#f59e0b"></span>
+        <span class="hm-leg-cell" style="background:#10b981"></span>
+        <span class="hm-leg-lbl">Au top</span>
+        <span class="hm-leg-sep">·</span>
+        <span class="hm-leg-cell hm-leg-empty"></span>
+        <span class="hm-leg-lbl">Pas de donnée</span>
       </div>
     </div>
 
@@ -3413,19 +3432,71 @@ function sparklineSVG(values) {
 
 function renderWellnessHeatmap() {
   const host = $('#wellnessHeatmap'); if (!host) return;
-  const today = new Date();
-  const days = 30;
   const byDate = new Map(A().wellness.map(w => [w.date, w]));
-  let html = '';
-  for (let i = days - 1; i >= 0; i--) {
-    const d = new Date(today); d.setDate(d.getDate() - i);
-    const iso = toISO(d);
-    const w = byDate.get(iso);
-    const avg = w ? wellnessAvg(w) : 0;
-    const color = w ? wellnessScoreColor(avg) : 'rgba(255,255,255,.04)';
-    const title = w ? `${fmtDate(iso)} · ${avg.toFixed(1)}/5` : `${fmtDate(iso)} · aucune donnée`;
-    html += `<div class="hm-cell" style="background:${color}" title="${title}"></div>`;
+  // Grille type GitHub : colonnes = semaines, lignes = jours (lun→dim).
+  // On affiche 6 semaines pour couvrir ~42 jours et toujours avoir une grille
+  // complète. La semaine du jour est tout à droite.
+  const WEEKS = 6;
+  const today = new Date(); today.setHours(0,0,0,0);
+  // Trouve le lundi de la semaine actuelle
+  const dow = (today.getDay() + 6) % 7; // 0=lundi
+  const thisMonday = new Date(today); thisMonday.setDate(today.getDate() - dow);
+  // Premier lundi affiché
+  const firstMonday = new Date(thisMonday); firstMonday.setDate(thisMonday.getDate() - (WEEKS - 1) * 7);
+
+  const dayLabels = ['L','M','M','J','V','S','D'];
+  const months = ['Jan','Fév','Mar','Avr','Mai','Juin','Juil','Août','Sept','Oct','Nov','Déc'];
+
+  // Étiquettes de mois : on note le mois au-dessus de la première colonne où
+  // commence ce mois.
+  const monthRow = [];
+  let lastMonth = -1;
+  for (let w = 0; w < WEEKS; w++) {
+    const d = new Date(firstMonday); d.setDate(firstMonday.getDate() + w * 7);
+    if (d.getMonth() !== lastMonth) { monthRow.push(months[d.getMonth()]); lastMonth = d.getMonth(); }
+    else monthRow.push('');
   }
+
+  let html = `
+    <div class="hm-month-row">
+      <div class="hm-corner"></div>
+      ${monthRow.map(m => `<div class="hm-month">${m}</div>`).join('')}
+    </div>
+    <div class="hm-body">
+      <div class="hm-day-col">
+        ${dayLabels.map((d,i) => `<div class="hm-day-lbl" style="visibility:${i%2===0?'visible':'hidden'}">${d}</div>`).join('')}
+      </div>
+      <div class="hm-grid">
+  `;
+  for (let w = 0; w < WEEKS; w++) {
+    html += `<div class="hm-col">`;
+    for (let d = 0; d < 7; d++) {
+      const cell = new Date(firstMonday); cell.setDate(firstMonday.getDate() + w * 7 + d);
+      cell.setHours(0,0,0,0);
+      const iso = toISO(cell);
+      const future = cell > today;
+      const isToday = cell.getTime() === today.getTime();
+      const data = byDate.get(iso);
+      const avg = data ? wellnessAvg(data) : 0;
+      const color = future ? 'transparent'
+                  : data ? wellnessScoreColor(avg)
+                  : 'rgba(255,255,255,.05)';
+      const border = future ? 'transparent'
+                   : data ? 'transparent'
+                   : 'rgba(255,255,255,.06)';
+      const dayNum = cell.getDate();
+      const title = future
+        ? `${fmtDate(iso)} · à venir`
+        : data ? `${fmtDate(iso)} · ${avg.toFixed(1)}/5`
+        : `${fmtDate(iso)} · aucune donnée`;
+      html += `<div class="hm-cell ${isToday?'is-today':''} ${future?'is-future':''} ${data?'has-data':''}"
+                    style="background:${color};border-color:${border}"
+                    title="${title}"
+                    data-day="${dayNum}"></div>`;
+    }
+    html += `</div>`;
+  }
+  html += `</div></div>`;
   host.innerHTML = html;
 }
 
