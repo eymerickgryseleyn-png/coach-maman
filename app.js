@@ -818,7 +818,7 @@ function renderDashboard() {
     <div class="daily-quote" aria-label="Phrase du jour">
       <div class="daily-quote-bg"></div>
       <div class="daily-quote-head">
-        <span class="daily-quote-ico">✨</span>
+        <span class="daily-quote-ico">${ae('✨')}</span>
         <span class="daily-quote-date">${todayStr}</span>
       </div>
       <div class="daily-quote-text">${quote}</div>
@@ -3133,6 +3133,17 @@ const WELLNESS_EMOJI = {
   stress:   ['🤯','😰','😐','😌','🧘'],
   mood:     ['😞','😕','😐','😊','😁'],
 };
+
+// Force le rendu Apple des emojis (cohérent iPhone/Android/Windows).
+// Utilise emojicdn.elk.sh qui proxifie les emojis Apple en PNG.
+// L'alt= contient l'emoji original, donc si l'image ne charge pas, le navigateur
+// affiche l'emoji système en fallback (jamais de carré vide).
+function ae(emoji) {
+  if (!emoji || emoji === '·' || emoji === '-' || emoji === '—') return emoji;
+  const enc = encodeURIComponent(emoji);
+  return `<img class="ae" src="https://emojicdn.elk.sh/${enc}?style=apple" alt="${emoji}" loading="lazy" decoding="async">`;
+}
+window.ae = ae;
 const WELLNESS_COLORS = {
   sleep:'#5b8def', fatigue:'#f59e0b', soreness:'#ef4444', stress:'#a855f7', mood:'#10b981'
 };
@@ -3172,13 +3183,13 @@ function renderWellness() {
         ${wellnessHeroOrb(avg, filled)}
         <div class="wellness-hero-side">
           ${filled
-            ? `<div class="wellness-mood">${mood.emoji}<span>${mood.text}</span></div>
+            ? `<div class="wellness-mood">${ae(mood.emoji)}<span>${mood.text}</span></div>
                <div class="wellness-mini-stats">
                  ${WELLNESS_QUESTIONS.map(q => {
                    const v = cur[q.id] || 0;
                    const pct = v ? (v / 5) * 100 : 0;
                    return `<div class="mini-stat" style="--c:${WELLNESS_COLORS[q.id]}">
-                     <span class="mini-stat-emoji">${v?wellnessEmojiForValue(q.id,v):'·'}</span>
+                     <span class="mini-stat-emoji">${v?ae(wellnessEmojiForValue(q.id,v)):'·'}</span>
                      <span class="mini-stat-label">${q.label}</span>
                      <span class="mini-stat-bar"><span style="width:${pct}%"></span></span>
                      <span class="mini-stat-val">${v?v.toFixed(1):'—'}</span>
@@ -3297,7 +3308,7 @@ function renderWellnessForm() {
   const renderSliderRow = q => {
     const has = typeof cur[q.id] === 'number' && cur[q.id] > 0;
     const v = has ? cur[q.id] : 3;
-    const emoji = has ? wellnessEmojiForValue(q.id, v) : '·';
+    const emoji = has ? ae(wellnessEmojiForValue(q.id, v)) : '·';
     const label = has ? wellnessLabelForValue(q, v) : 'Glisse pour répondre…';
     const pct = ((v - 1) / 4) * 100;
     return `
@@ -3346,7 +3357,7 @@ function renderWellnessForm() {
       const v = parseFloat(range.value);
       const pct = ((v - 1) / 4) * 100;
       wq.style.setProperty('--pct', pct + '%');
-      wq.querySelector('.wq-emoji').textContent = wellnessEmojiForValue(qid, v);
+      wq.querySelector('.wq-emoji').innerHTML = ae(wellnessEmojiForValue(qid, v));
       const valEl = wq.querySelector('.wq-value');
       valEl.innerHTML = v.toFixed(1) + '<span class="wq-value-max">/5</span>';
       wq.querySelector('.wq-current').textContent = wellnessLabelForValue(q, v);
@@ -3390,7 +3401,7 @@ function renderWellnessTrend() {
     return `
       <div class="trend-card" style="--c:${WELLNESS_COLORS[q.id]}">
         <div class="trend-head">
-          <span class="trend-emoji">${last?WELLNESS_EMOJI[q.id][last-1]:'·'}</span>
+          <span class="trend-emoji">${last?ae(WELLNESS_EMOJI[q.id][Math.max(0,Math.min(4,Math.round(last)-1))]):'·'}</span>
           <span class="trend-name">${q.label}</span>
         </div>
         <div class="trend-spark">${sparklineSVG(values)}</div>
@@ -3539,7 +3550,7 @@ function renderWellnessList() {
       <div class="wcard-bars">
         ${WELLNESS_QUESTIONS.map(q => {
           const v = w[q.id] || 0;
-          const emoji = v ? wellnessEmojiForValue(q.id, v) : '·';
+          const emoji = v ? ae(wellnessEmojiForValue(q.id, v)) : '·';
           const display = v ? (Number.isInteger(v) ? v : v.toFixed(1)) : '—';
           return `
           <div class="wcard-bar" title="${q.label}: ${display}/5">

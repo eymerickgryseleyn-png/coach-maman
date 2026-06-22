@@ -558,6 +558,17 @@ input, select, textarea { font-family: inherit; font-size: 14px; }
   border: 1px solid var(--border);
 }
 
+/* Emojis Apple-style (force le rendu Apple sur Android/Windows aussi). */
+img.ae {
+  height: 1em;
+  width: 1em;
+  vertical-align: -.15em;
+  display: inline-block;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
 /* DAILY QUOTE (accueil) */
 .daily-quote {
   position: relative;
