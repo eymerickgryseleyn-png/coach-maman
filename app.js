@@ -812,7 +812,17 @@ function renderDashboard() {
 
   const acwr = computeACWR();
 
+  const quote = (typeof getDailyQuote === 'function') ? getDailyQuote() : '';
+  const todayStr = new Date().toLocaleDateString('fr-FR', { weekday:'long', day:'numeric', month:'long' });
   $('#view-dashboard').innerHTML = `
+    <div class="daily-quote" aria-label="Phrase du jour">
+      <div class="daily-quote-bg"></div>
+      <div class="daily-quote-head">
+        <span class="daily-quote-ico">✨</span>
+        <span class="daily-quote-date">${todayStr}</span>
+      </div>
+      <div class="daily-quote-text">${quote}</div>
+    </div>
     ${todayFocus()}
     <div class="grid grid-3 mb-16">
       <div class="kpi">
@@ -3146,23 +3156,25 @@ function renderWellness() {
   const avg = filled ? wellnessAvg(cur) : 0;
   const labelDate = isToday ? "Aujourd'hui" : fmtDateShort(selDate);
 
+  const mood = filled ? wellnessMoodLabel(avg) : null;
   $('#view-wellness').innerHTML = `
     <div class="wellness-hero">
+      <div class="wellness-hero-bg"></div>
       <div class="wellness-hero-nav">
-        <button class="wellness-navbtn" id="wellPrev" aria-label="Jour précédent">◀</button>
+        <button class="wellness-navbtn" id="wellPrev" aria-label="Jour précédent">‹</button>
         <div class="wellness-hero-date">
           <div class="wellness-hero-day">${labelDate}</div>
           <div class="wellness-hero-iso">${fmtDate(selDate)}</div>
         </div>
-        <button class="wellness-navbtn" id="wellNext" aria-label="Jour suivant" ${isToday?'disabled':''}>▶</button>
+        <button class="wellness-navbtn" id="wellNext" aria-label="Jour suivant" ${isToday?'disabled':''}>›</button>
       </div>
-      <div class="wellness-gauge-wrap">
-        ${wellnessGaugeSVG(avg, filled)}
+      <div class="wellness-hero-main">
+        ${wellnessHeroOrb(avg, filled)}
       </div>
       <div class="wellness-hero-foot">
         ${filled
-          ? `<span class="wellness-status ok">✓ Questionnaire complété</span>`
-          : `<span class="wellness-status pending">À remplir</span>`}
+          ? `<div class="wellness-mood">${mood.emoji} <span>${mood.text}</span></div>`
+          : `<div class="wellness-status pending">Pas encore de réponse</div>`}
       </div>
     </div>
 
@@ -3189,11 +3201,6 @@ function renderWellness() {
       </div>
     </div>
 
-    <div class="card">
-      <div class="card-h"><h3>Évolution détaillée · 30 jours</h3></div>
-      <div class="chart-wrap lg"><canvas id="wellnessChart"></canvas></div>
-    </div>
-
     <h3 class="section-title">Historique</h3>
     <div id="wellnessList"></div>
   `;
@@ -3202,57 +3209,101 @@ function renderWellness() {
   renderWellnessForm();
   renderWellnessTrend();
   renderWellnessHeatmap();
-  drawWellnessChart();
   renderWellnessList();
 }
 
-function wellnessGaugeSVG(avg, filled) {
-  const pct = filled ? avg / 5 : 0;
-  const r = 56, c = 2 * Math.PI * r;
-  const dash = c * pct;
+function wellnessMoodLabel(avg) {
+  if (avg >= 4.5) return { emoji: '🌟', text: 'Forme olympique' };
+  if (avg >= 4.0) return { emoji: '✨', text: 'Excellente journée' };
+  if (avg >= 3.5) return { emoji: '😊', text: 'Belle énergie' };
+  if (avg >= 3.0) return { emoji: '🙂', text: 'Journée correcte' };
+  if (avg >= 2.5) return { emoji: '😐', text: 'Journée moyenne' };
+  if (avg >= 2.0) return { emoji: '😕', text: 'Journée difficile' };
+  return { emoji: '🌧️', text: 'Prends soin de toi' };
+}
+
+function wellnessHeroOrb(avg, filled) {
+  const pct = filled ? Math.max(0, Math.min(1, avg / 5)) : 0;
+  const R = 76, C = 2 * Math.PI * R;
+  const dash = C * pct;
   const color = filled ? wellnessScoreColor(avg) : '#475569';
+  const intStr = filled ? Math.floor(avg) : '—';
+  const decStr = filled ? (avg.toFixed(1).split('.')[1] || '0') : '';
+  // Convertit la note 1-5 en valeur fractionnaire en mode dégradé continu
   return `
-    <svg class="wellness-gauge" viewBox="0 0 140 140" width="140" height="140">
-      <circle cx="70" cy="70" r="${r}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="10"/>
-      <circle cx="70" cy="70" r="${r}" fill="none" stroke="${color}" stroke-width="10"
-        stroke-linecap="round"
-        stroke-dasharray="${dash} ${c}"
-        transform="rotate(-90 70 70)"
-        style="transition: stroke-dasharray .6s ease, stroke .3s"/>
-      <text x="70" y="68" text-anchor="middle" font-size="34" font-weight="700" fill="var(--text)">${filled ? avg.toFixed(1) : '—'}</text>
-      <text x="70" y="90" text-anchor="middle" font-size="11" fill="var(--text-mute)">${filled ? '/ 5' : 'pas de données'}</text>
-    </svg>
+    <div class="orb">
+      <svg class="orb-svg" viewBox="0 0 200 200" width="200" height="200" aria-hidden="true">
+        <defs>
+          <linearGradient id="orbGrad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="${color}" stop-opacity=".9"/>
+            <stop offset="100%" stop-color="${color}" stop-opacity=".55"/>
+          </linearGradient>
+          <filter id="orbGlow" x="-30%" y="-30%" width="160%" height="160%">
+            <feGaussianBlur stdDeviation="6" result="b"/>
+            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+          </filter>
+        </defs>
+        <circle cx="100" cy="100" r="${R}" fill="none" stroke="rgba(255,255,255,.06)" stroke-width="6"/>
+        <circle cx="100" cy="100" r="${R}" fill="none"
+          stroke="url(#orbGrad)" stroke-width="8" stroke-linecap="round"
+          stroke-dasharray="${dash} ${C}"
+          transform="rotate(-90 100 100)"
+          filter="url(#orbGlow)"
+          style="transition: stroke-dasharray .9s cubic-bezier(.4,0,.2,1)"/>
+      </svg>
+      <div class="orb-content">
+        <div class="orb-label">Forme du jour</div>
+        <div class="orb-number" style="color:${color}">
+          <span class="orb-int">${intStr}</span>${filled?`<span class="orb-dec">,${decStr}</span><span class="orb-max">/5</span>`:''}
+        </div>
+      </div>
+    </div>
   `;
+}
+
+function wellnessEmojiForValue(qid, v) {
+  // v est continu (1.0 à 5.0) — on prend l'emoji le plus proche
+  const idx = Math.max(0, Math.min(4, Math.round(v) - 1));
+  return WELLNESS_EMOJI[qid][idx];
+}
+function wellnessLabelForValue(q, v) {
+  const idx = Math.max(0, Math.min(4, Math.round(v) - 1));
+  return q.labels[idx];
 }
 
 function renderWellnessForm() {
   const today = wellnessSelectedDate();
   const cur = A().wellness.find(w => w.date === today) || { date: today };
   const form = $('#wellnessForm');
-  const renderSlider = q => {
-    const v = cur[q.id] || 0;
-    const emoji = v ? WELLNESS_EMOJI[q.id][v-1] : '·';
-    const label = v ? q.labels[v-1] : 'Sélectionne…';
+  const renderSliderRow = q => {
+    const has = typeof cur[q.id] === 'number' && cur[q.id] > 0;
+    const v = has ? cur[q.id] : 3;
+    const emoji = has ? wellnessEmojiForValue(q.id, v) : '·';
+    const label = has ? wellnessLabelForValue(q, v) : 'Glisse pour répondre…';
+    const pct = ((v - 1) / 4) * 100;
     return `
-      <div class="wq" data-q="${q.id}">
+      <div class="wq" data-q="${q.id}" data-has="${has?'1':'0'}" style="--c:${WELLNESS_COLORS[q.id]}; --pct:${pct}%">
         <div class="wq-head">
           <div class="wq-title">
             <span class="wq-emoji">${emoji}</span>
             <span class="wq-label">${q.label}</span>
           </div>
-          <div class="wq-value" style="color:${v?WELLNESS_COLORS[q.id]:'var(--text-mute)'}">${v?v+'/5':'—'}</div>
+          <div class="wq-value">${has?v.toFixed(1):'—'}<span class="wq-value-max">/5</span></div>
         </div>
         <div class="wq-hint">${q.hint}</div>
-        <div class="wq-slider" role="radiogroup" aria-label="${q.label}">
-          ${[1,2,3,4,5].map(n => `
-            <button type="button" class="wq-dot ${v===n?'active':''}" data-v="${n}"
-                    style="--c:${WELLNESS_COLORS[q.id]}"
-                    aria-checked="${v===n}" role="radio"
-                    title="${q.labels[n-1]}">
-              <span class="wq-dot-emoji">${WELLNESS_EMOJI[q.id][n-1]}</span>
-              <span class="wq-dot-num">${n}</span>
-            </button>
-          `).join('')}
+        <div class="wq-slider-wrap">
+          <div class="wq-track">
+            <div class="wq-track-fill"></div>
+            <div class="wq-ticks">
+              ${[1,2,3,4,5].map(n => `<span class="wq-tick" data-n="${n}"></span>`).join('')}
+            </div>
+          </div>
+          <input type="range" class="wq-range" min="1" max="5" step="0.1" value="${v}"
+                 aria-label="${q.label}" data-q="${q.id}">
+          <div class="wq-anchors">
+            <span>${q.labels[0]}</span>
+            <span>${q.labels[4]}</span>
+          </div>
         </div>
         <div class="wq-current">${label}</div>
       </div>
@@ -3260,7 +3311,7 @@ function renderWellnessForm() {
   };
   form.innerHTML = `
     <div class="wellness-form-grid">
-      ${WELLNESS_QUESTIONS.map(renderSlider).join('')}
+      ${WELLNESS_QUESTIONS.map(renderSliderRow).join('')}
     </div>
     <div class="wq wq-note">
       <label for="wellNote">📝 Note / contexte (optionnel)</label>
@@ -3269,22 +3320,33 @@ function renderWellnessForm() {
     <button class="btn btn-primary wellness-save-btn" id="wellSave">💾 Enregistrer</button>
   `;
   form.querySelectorAll('.wq[data-q]').forEach(wq => {
-    wq.addEventListener('click', e => {
-      const b = e.target.closest('.wq-dot'); if (!b) return;
-      const qid = wq.dataset.q;
-      const v = +b.dataset.v;
-      cur[qid] = v;
-      wq.querySelectorAll('.wq-dot').forEach(x => x.classList.toggle('active', +x.dataset.v === v));
-      wq.querySelector('.wq-emoji').textContent = WELLNESS_EMOJI[qid][v-1];
+    const qid = wq.dataset.q;
+    const q = WELLNESS_QUESTIONS.find(x => x.id === qid);
+    const range = wq.querySelector('.wq-range');
+    const update = (commit) => {
+      const v = parseFloat(range.value);
+      const pct = ((v - 1) / 4) * 100;
+      wq.style.setProperty('--pct', pct + '%');
+      wq.querySelector('.wq-emoji').textContent = wellnessEmojiForValue(qid, v);
       const valEl = wq.querySelector('.wq-value');
-      valEl.textContent = v + '/5';
-      valEl.style.color = WELLNESS_COLORS[qid];
-      wq.querySelector('.wq-current').textContent = WELLNESS_QUESTIONS.find(q => q.id===qid).labels[v-1];
-    });
+      valEl.innerHTML = v.toFixed(1) + '<span class="wq-value-max">/5</span>';
+      wq.querySelector('.wq-current').textContent = wellnessLabelForValue(q, v);
+      wq.dataset.has = '1';
+      if (commit) cur[qid] = Math.round(v * 10) / 10;
+    };
+    range.addEventListener('input', () => update(false));
+    range.addEventListener('change', () => update(true));
+    range.addEventListener('pointerdown', () => { if (wq.dataset.has !== '1') update(true); });
   });
   $('#wellSave').addEventListener('click', () => {
     cur.note = $('#wellNote').value; cur.date = cur.date || today;
-    if (WELLNESS_QUESTIONS.some(q => !cur[q.id])) { toast('Réponds à toutes les questions'); return; }
+    // Capture les valeurs des sliders qui n'auraient pas déclenché change (clic pur)
+    form.querySelectorAll('.wq[data-q]').forEach(wq => {
+      if (wq.dataset.has === '1' && cur[wq.dataset.q] == null) {
+        cur[wq.dataset.q] = parseFloat(wq.querySelector('.wq-range').value);
+      }
+    });
+    if (WELLNESS_QUESTIONS.some(q => !cur[q.id])) { toast('Glisse chaque curseur au moins une fois'); return; }
     const idx = A().wellness.findIndex(w => w.date === cur.date);
     if (idx >= 0) A().wellness[idx] = cur; else A().wellness.push(cur);
     A().wellness.sort((a,b) => a.date.localeCompare(b.date));
@@ -3404,13 +3466,17 @@ function renderWellnessList() {
         <button class="btn-icon wcard-del" data-del="${w.date}" title="Supprimer">×</button>
       </div>
       <div class="wcard-bars">
-        ${WELLNESS_QUESTIONS.map(q => `
-          <div class="wcard-bar" title="${q.label}: ${w[q.id]}/5">
-            <div class="wcard-bar-lbl">${WELLNESS_EMOJI[q.id][(w[q.id]||1)-1]}</div>
-            <div class="wcard-bar-track"><div class="wcard-bar-fill" style="width:${(w[q.id]||0)/5*100}%;background:${WELLNESS_COLORS[q.id]}"></div></div>
-            <div class="wcard-bar-val">${w[q.id]||'—'}</div>
-          </div>
-        `).join('')}
+        ${WELLNESS_QUESTIONS.map(q => {
+          const v = w[q.id] || 0;
+          const emoji = v ? wellnessEmojiForValue(q.id, v) : '·';
+          const display = v ? (Number.isInteger(v) ? v : v.toFixed(1)) : '—';
+          return `
+          <div class="wcard-bar" title="${q.label}: ${display}/5">
+            <div class="wcard-bar-lbl">${emoji}</div>
+            <div class="wcard-bar-track"><div class="wcard-bar-fill" style="width:${v/5*100}%;background:${WELLNESS_COLORS[q.id]}"></div></div>
+            <div class="wcard-bar-val">${display}</div>
+          </div>`;
+        }).join('')}
       </div>
       ${w.note?`<div class="wcard-note">📝 ${w.note}</div>`:''}
     </div>`;
