@@ -213,15 +213,14 @@ function listenAthlete(athleteId) {
     if (!data || !data.athlete) return;
     // Ignore les snapshots venant de NOTRE propre écriture
     if (data.writerId === fbState.writerId) return;
-    // Compare timestamps : n'applique que si la version cloud est PLUS RÉCENTE que la locale
+    // IMPORTANT : le merge est UNION-based (sessions/wellness/done/records), donc
+    // même si le timestamp cloud est "plus ancien" que le local, il peut contenir
+    // des items que NOUS n'avons pas (ex : ma mère a ajouté un wellness depuis son
+    // tél pendant que j'éditais une séance sur le mien). On fait TOUJOURS le merge,
+    // et on re-pousse si on a découvert des choses ou si notre version est plus récente.
     const cloudTs = +data.ts || 0;
     const localTs = +(state.athletes[athleteId]?._lastModTs) || 0;
-    if (cloudTs <= localTs) {
-      // Cloud plus ancien → push notre version pour rattraper
-      console.log('[sync] cloud version older, pushing local');
-      cloudPushDebounced();
-      return;
-    }
+    const cloudOlder = cloudTs <= localTs;
     // Applique la version cloud MAIS le cloud ne doit JAMAIS écraser le plan
     // (weeks/startDate) si l'appareil a déjà un plan issu de l'Excel. Le plan vient
     // toujours de l'Excel via syncFromExcel() sur chaque appareil. Sans ça, un vieux
@@ -229,11 +228,13 @@ function listenAthlete(athleteId) {
     // "compétition/affutage") par-dessus la lecture Excel.
     const localA = state.athletes[athleteId] || {};
     const localFromExcel = Array.isArray(localA.weeks) && localA.weeks.some(w => w && w.startDate);
-    const merged = { ...data.athlete, _lastModTs: cloudTs };
+    const merged = { ...data.athlete, _lastModTs: Math.max(cloudTs, localTs) };
     if (localFromExcel) {
       merged.weeks = localA.weeks;
       if (localA.startDate) merged.startDate = localA.startDate;
     }
+    // Track si on a des items locaux que le cloud ignore (force un push après merge).
+    let localHasExtra = false;
     // Fusion sessions (union par clé unique)
     const localSessions = Array.isArray(localA.sessions) ? localA.sessions : [];
     const cloudSessions = Array.isArray(merged.sessions) ? merged.sessions : [];
@@ -245,6 +246,7 @@ function listenAthlete(athleteId) {
       cloudSessions.forEach(s => { const k = sessionKey(s); if (!map.has(k)) { map.set(k, s); newCount++; } });
       merged.sessions = [...map.values()];
       if (newCount > 0) notifyNewSession(newCount);
+      if (merged.sessions.length > cloudSessions.length) localHasExtra = true;
     }
     // Fusion wellness (union par date, version la plus complète gagne)
     const localWellness = Array.isArray(localA.wellness) ? localA.wellness : [];
@@ -262,11 +264,13 @@ function listenAthlete(athleteId) {
         }
       });
       merged.wellness = [...wmap.values()].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      if (merged.wellness.length > cloudWellness.length) localHasExtra = true;
     }
     // Fusion done (union des clés, garde la version avec le plus de données)
     const localDone = localA.done || {};
     const cloudDone = merged.done || {};
     merged.done = { ...cloudDone, ...localDone };
+    if (Object.keys(merged.done).length > Object.keys(cloudDone).length) localHasExtra = true;
     // Fusion records (union par clé exercise+date)
     const localRecords = Array.isArray(localA.records) ? localA.records : [];
     const cloudRecords = Array.isArray(merged.records) ? merged.records : [];
@@ -275,6 +279,7 @@ function listenAthlete(athleteId) {
       localRecords.forEach(r => rmap.set(`${r.exercise||''}_${r.date||''}`, r));
       cloudRecords.forEach(r => { const k = `${r.exercise||''}_${r.date||''}`; if (!rmap.has(k)) rmap.set(k, r); });
       merged.records = [...rmap.values()];
+      if (merged.records.length > cloudRecords.length) localHasExtra = true;
     }
     state.athletes[athleteId] = merged;
     try {
@@ -283,6 +288,12 @@ function listenAthlete(athleteId) {
     const active = document.querySelector('.nav-item.active')?.dataset.view || 'dashboard';
     if (typeof render === 'function') render(active);
     toast('☁ Synchronisé depuis un autre appareil');
+    // Si on a découvert que le cloud manque d'items qu'on a localement, ou si
+    // notre version locale était plus récente, on repousse pour rattraper.
+    if (cloudOlder || localHasExtra) {
+      merged._lastModTs = Math.max(merged._lastModTs, Date.now());
+      cloudPushDebounced();
+    }
   }, (err) => {
     console.error('onSnapshot error:', err);
     setCloudStatus('error', err.message);
@@ -3105,63 +3116,170 @@ function wellnessSelectedDate() {
   return toISO(d);
 }
 
+const WELLNESS_EMOJI = {
+  sleep:    ['😵','😴','😐','🙂','😄'],
+  fatigue:  ['🪫','😩','😐','💪','⚡'],
+  soreness: ['🔥','😣','😐','🙂','✨'],
+  stress:   ['🤯','😰','😐','😌','🧘'],
+  mood:     ['😞','😕','😐','😊','😁'],
+};
+const WELLNESS_COLORS = {
+  sleep:'#5b8def', fatigue:'#f59e0b', soreness:'#ef4444', stress:'#a855f7', mood:'#10b981'
+};
+
+function wellnessAvg(w) {
+  if (!w) return 0;
+  return (w.sleep + w.fatigue + w.soreness + w.stress + w.mood) / 5;
+}
+function wellnessScoreColor(avg) {
+  if (avg >= 4) return '#10b981';
+  if (avg >= 3) return '#f59e0b';
+  if (avg >= 2) return '#f97316';
+  return '#ef4444';
+}
+
 function renderWellness() {
   const selDate = wellnessSelectedDate();
   const isToday = wellnessDateOffset === 0;
+  const cur = A().wellness.find(w => w.date === selDate) || { date: selDate };
+  const filled = WELLNESS_QUESTIONS.every(q => cur[q.id]);
+  const avg = filled ? wellnessAvg(cur) : 0;
+  const labelDate = isToday ? "Aujourd'hui" : fmtDateShort(selDate);
+
   $('#view-wellness').innerHTML = `
-    <div class="grid grid-2">
-      <div class="card">
-        <div class="card-h" style="flex-wrap:wrap;gap:8px">
-          <h3>Questionnaire</h3>
-          <div style="display:flex;align-items:center;gap:6px">
-            <button class="btn btn-ghost btn-sm" id="wellPrev" title="Jour précédent">◀</button>
-            <span class="tag accent" id="wellDateLabel">${isToday ? "Aujourd'hui" : fmtDateShort(selDate)} · ${selDate}</span>
-            <button class="btn btn-ghost btn-sm" id="wellNext" title="Jour suivant" ${isToday?'disabled':''}>▶</button>
-          </div>
+    <div class="wellness-hero">
+      <div class="wellness-hero-nav">
+        <button class="wellness-navbtn" id="wellPrev" aria-label="Jour précédent">◀</button>
+        <div class="wellness-hero-date">
+          <div class="wellness-hero-day">${labelDate}</div>
+          <div class="wellness-hero-iso">${fmtDate(selDate)}</div>
         </div>
-        <div id="wellnessForm"></div>
+        <button class="wellness-navbtn" id="wellNext" aria-label="Jour suivant" ${isToday?'disabled':''}>▶</button>
       </div>
-      <div class="card">
-        <div class="card-h"><h3>Évolution 30 jours</h3></div>
-        <div class="chart-wrap lg"><canvas id="wellnessChart"></canvas></div>
+      <div class="wellness-gauge-wrap">
+        ${wellnessGaugeSVG(avg, filled)}
+      </div>
+      <div class="wellness-hero-foot">
+        ${filled
+          ? `<span class="wellness-status ok">✓ Questionnaire complété</span>`
+          : `<span class="wellness-status pending">À remplir</span>`}
       </div>
     </div>
+
+    <div class="card wellness-form-card">
+      <div class="card-h"><h3>Comment te sens-tu ?</h3></div>
+      <div id="wellnessForm"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>Tendance · 14 derniers jours</h3></div>
+      <div class="wellness-trend-grid" id="wellnessTrend"></div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>Heatmap · 30 jours</h3></div>
+      <div class="wellness-heatmap" id="wellnessHeatmap"></div>
+      <div class="wellness-heatmap-legend">
+        <span>Moins bien</span>
+        <span class="hm-cell" style="background:#ef4444"></span>
+        <span class="hm-cell" style="background:#f97316"></span>
+        <span class="hm-cell" style="background:#f59e0b"></span>
+        <span class="hm-cell" style="background:#10b981"></span>
+        <span>Au top</span>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-h"><h3>Évolution détaillée · 30 jours</h3></div>
+      <div class="chart-wrap lg"><canvas id="wellnessChart"></canvas></div>
+    </div>
+
     <h3 class="section-title">Historique</h3>
     <div id="wellnessList"></div>
   `;
   $('#wellPrev').addEventListener('click', () => { wellnessDateOffset--; renderWellness(); });
   $('#wellNext').addEventListener('click', () => { if (wellnessDateOffset < 0) { wellnessDateOffset++; renderWellness(); } });
   renderWellnessForm();
+  renderWellnessTrend();
+  renderWellnessHeatmap();
   drawWellnessChart();
   renderWellnessList();
+}
+
+function wellnessGaugeSVG(avg, filled) {
+  const pct = filled ? avg / 5 : 0;
+  const r = 56, c = 2 * Math.PI * r;
+  const dash = c * pct;
+  const color = filled ? wellnessScoreColor(avg) : '#475569';
+  return `
+    <svg class="wellness-gauge" viewBox="0 0 140 140" width="140" height="140">
+      <circle cx="70" cy="70" r="${r}" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="10"/>
+      <circle cx="70" cy="70" r="${r}" fill="none" stroke="${color}" stroke-width="10"
+        stroke-linecap="round"
+        stroke-dasharray="${dash} ${c}"
+        transform="rotate(-90 70 70)"
+        style="transition: stroke-dasharray .6s ease, stroke .3s"/>
+      <text x="70" y="68" text-anchor="middle" font-size="34" font-weight="700" fill="var(--text)">${filled ? avg.toFixed(1) : '—'}</text>
+      <text x="70" y="90" text-anchor="middle" font-size="11" fill="var(--text-mute)">${filled ? '/ 5' : 'pas de données'}</text>
+    </svg>
+  `;
 }
 
 function renderWellnessForm() {
   const today = wellnessSelectedDate();
   const cur = A().wellness.find(w => w.date === today) || { date: today };
   const form = $('#wellnessForm');
-  form.innerHTML = WELLNESS_QUESTIONS.map(q => `
-    <div class="wellness-q">
-      <label>${q.label}</label>
-      <div class="qhint">${q.hint}</div>
-      <div class="scale" data-q="${q.id}">
-        ${[1,2,3,4,5].map(v => `<button class="scale-opt ${cur[q.id]===v?'selected v'+v:''}" data-v="${v}">${v}</button>`).join('')}
+  const renderSlider = q => {
+    const v = cur[q.id] || 0;
+    const emoji = v ? WELLNESS_EMOJI[q.id][v-1] : '·';
+    const label = v ? q.labels[v-1] : 'Sélectionne…';
+    return `
+      <div class="wq" data-q="${q.id}">
+        <div class="wq-head">
+          <div class="wq-title">
+            <span class="wq-emoji">${emoji}</span>
+            <span class="wq-label">${q.label}</span>
+          </div>
+          <div class="wq-value" style="color:${v?WELLNESS_COLORS[q.id]:'var(--text-mute)'}">${v?v+'/5':'—'}</div>
+        </div>
+        <div class="wq-hint">${q.hint}</div>
+        <div class="wq-slider" role="radiogroup" aria-label="${q.label}">
+          ${[1,2,3,4,5].map(n => `
+            <button type="button" class="wq-dot ${v===n?'active':''}" data-v="${n}"
+                    style="--c:${WELLNESS_COLORS[q.id]}"
+                    aria-checked="${v===n}" role="radio"
+                    title="${q.labels[n-1]}">
+              <span class="wq-dot-emoji">${WELLNESS_EMOJI[q.id][n-1]}</span>
+              <span class="wq-dot-num">${n}</span>
+            </button>
+          `).join('')}
+        </div>
+        <div class="wq-current">${label}</div>
       </div>
-      <div class="scale-labels"><span>${q.labels[0]}</span><span>${q.labels[4]}</span></div>
+    `;
+  };
+  form.innerHTML = `
+    <div class="wellness-form-grid">
+      ${WELLNESS_QUESTIONS.map(renderSlider).join('')}
     </div>
-  `).join('') + `
-    <div class="wellness-q">
-      <label>Note / contexte (optionnel)</label>
+    <div class="wq wq-note">
+      <label for="wellNote">📝 Note / contexte (optionnel)</label>
       <textarea id="wellNote" placeholder="Ex : retour de garde, douleur cheville droite...">${cur.note||''}</textarea>
     </div>
-    <button class="btn btn-primary" id="wellSave" style="width:100%">💾 Enregistrer</button>
+    <button class="btn btn-primary wellness-save-btn" id="wellSave">💾 Enregistrer</button>
   `;
-  form.querySelectorAll('.scale').forEach(scale => {
-    scale.addEventListener('click', e => {
-      const b = e.target.closest('.scale-opt'); if (!b) return;
-      scale.querySelectorAll('.scale-opt').forEach(x => x.classList.remove('selected','v1','v2','v3','v4','v5'));
-      b.classList.add('selected','v'+b.dataset.v);
-      cur[scale.dataset.q] = +b.dataset.v;
+  form.querySelectorAll('.wq[data-q]').forEach(wq => {
+    wq.addEventListener('click', e => {
+      const b = e.target.closest('.wq-dot'); if (!b) return;
+      const qid = wq.dataset.q;
+      const v = +b.dataset.v;
+      cur[qid] = v;
+      wq.querySelectorAll('.wq-dot').forEach(x => x.classList.toggle('active', +x.dataset.v === v));
+      wq.querySelector('.wq-emoji').textContent = WELLNESS_EMOJI[qid][v-1];
+      const valEl = wq.querySelector('.wq-value');
+      valEl.textContent = v + '/5';
+      valEl.style.color = WELLNESS_COLORS[qid];
+      wq.querySelector('.wq-current').textContent = WELLNESS_QUESTIONS.find(q => q.id===qid).labels[v-1];
     });
   });
   $('#wellSave').addEventListener('click', () => {
@@ -3172,8 +3290,81 @@ function renderWellnessForm() {
     A().wellness.sort((a,b) => a.date.localeCompare(b.date));
     saveState();
     toast('Wellness enregistré ✓');
-    drawWellnessChart(); renderWellnessList();
+    renderWellness();
   });
+}
+
+function renderWellnessTrend() {
+  const host = $('#wellnessTrend'); if (!host) return;
+  const last14 = A().wellness.slice(-14);
+  if (!last14.length) { host.innerHTML = `<div class="text-mute" style="padding:14px">Pas encore de données.</div>`; return; }
+  host.innerHTML = WELLNESS_QUESTIONS.map(q => {
+    const values = last14.map(w => w[q.id] || 0);
+    const last = values[values.length-1] || 0;
+    const prev = values.length > 1 ? values[values.length-2] : last;
+    const delta = last - prev;
+    const arrow = delta > 0 ? '↗' : delta < 0 ? '↘' : '→';
+    const arrowColor = delta > 0 ? '#10b981' : delta < 0 ? '#ef4444' : 'var(--text-mute)';
+    const avg = values.filter(v => v).reduce((a,b)=>a+b,0) / Math.max(1, values.filter(v=>v).length);
+    return `
+      <div class="trend-card" style="--c:${WELLNESS_COLORS[q.id]}">
+        <div class="trend-head">
+          <span class="trend-emoji">${last?WELLNESS_EMOJI[q.id][last-1]:'·'}</span>
+          <span class="trend-name">${q.label}</span>
+        </div>
+        <div class="trend-spark">${sparklineSVG(values)}</div>
+        <div class="trend-foot">
+          <span class="trend-now">${last?last+'/5':'—'}</span>
+          <span class="trend-delta" style="color:${arrowColor}">${arrow} ${Math.abs(delta).toFixed(0)}</span>
+          <span class="trend-avg">moy ${avg?avg.toFixed(1):'—'}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function sparklineSVG(values) {
+  const W = 120, H = 36, pad = 3;
+  if (!values.length) return '';
+  const max = 5, min = 1;
+  const xs = values.map((_, i) => pad + i * (W - pad*2) / Math.max(1, values.length - 1));
+  const ys = values.map(v => v ? H - pad - ((v - min) / (max - min)) * (H - pad*2) : null);
+  const pts = xs.map((x,i) => ys[i]==null ? null : `${x.toFixed(1)},${ys[i].toFixed(1)}`).filter(Boolean);
+  if (!pts.length) return `<svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}"></svg>`;
+  const path = 'M' + pts.join(' L');
+  const area = path + ` L${xs[xs.length-1].toFixed(1)},${H} L${xs[0].toFixed(1)},${H} Z`;
+  const lastX = xs[xs.length-1], lastY = ys[ys.length-1];
+  return `
+    <svg viewBox="0 0 ${W} ${H}" width="100%" height="${H}" preserveAspectRatio="none">
+      <defs>
+        <linearGradient id="sg" x1="0" x2="0" y1="0" y2="1">
+          <stop offset="0%" stop-color="var(--c)" stop-opacity=".35"/>
+          <stop offset="100%" stop-color="var(--c)" stop-opacity="0"/>
+        </linearGradient>
+      </defs>
+      <path d="${area}" fill="url(#sg)"/>
+      <path d="${path}" fill="none" stroke="var(--c)" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+      ${lastY!=null?`<circle cx="${lastX.toFixed(1)}" cy="${lastY.toFixed(1)}" r="2.4" fill="var(--c)"/>`:''}
+    </svg>
+  `;
+}
+
+function renderWellnessHeatmap() {
+  const host = $('#wellnessHeatmap'); if (!host) return;
+  const today = new Date();
+  const days = 30;
+  const byDate = new Map(A().wellness.map(w => [w.date, w]));
+  let html = '';
+  for (let i = days - 1; i >= 0; i--) {
+    const d = new Date(today); d.setDate(d.getDate() - i);
+    const iso = toISO(d);
+    const w = byDate.get(iso);
+    const avg = w ? wellnessAvg(w) : 0;
+    const color = w ? wellnessScoreColor(avg) : 'rgba(255,255,255,.04)';
+    const title = w ? `${fmtDate(iso)} · ${avg.toFixed(1)}/5` : `${fmtDate(iso)} · aucune donnée`;
+    html += `<div class="hm-cell" style="background:${color}" title="${title}"></div>`;
+  }
+  host.innerHTML = html;
 }
 
 function drawWellnessChart() {
@@ -3181,16 +3372,16 @@ function drawWellnessChart() {
   if (drawWellnessChart._chart) drawWellnessChart._chart.destroy();
   const last30 = A().wellness.slice(-30);
   const labels = last30.map(w => fmtDateShort(w.date));
-  const colors = { sleep:'#2c6db5', fatigue:'#c97f23', soreness:'#c0392b', stress:'#7a4ea0', mood:'#2d7a5f' };
   const sets = WELLNESS_QUESTIONS.map(q => ({
     label: q.label, data: last30.map(w => w[q.id]),
-    borderColor: colors[q.id], backgroundColor: 'transparent', tension: 0.3, pointRadius: 2
+    borderColor: WELLNESS_COLORS[q.id], backgroundColor: 'transparent', tension: 0.35, pointRadius: 2, borderWidth: 2
   }));
   drawWellnessChart._chart = new Chart(canvas, {
     type:'line', data:{ labels, datasets: sets },
     options:{ responsive:true, maintainAspectRatio:false,
-      scales:{ y:{ min:1, max:5, ticks:{ stepSize:1 } } },
-      plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 } } } } }
+      scales:{ y:{ min:1, max:5, ticks:{ stepSize:1, color:'var(--text-mute)' }, grid:{ color:'rgba(255,255,255,.05)' } },
+               x:{ ticks:{ color:'var(--text-mute)' }, grid:{ color:'rgba(255,255,255,.05)' } } },
+      plugins:{ legend:{ position:'bottom', labels:{ boxWidth:10, font:{ size:11 }, color:'var(--text-soft)' } } } }
   });
 }
 
@@ -3200,24 +3391,32 @@ function renderWellnessList() {
     $('#wellnessList').innerHTML = `<div class="empty"><div class="empty-ico">♥</div>Aucun wellness enregistré</div>`;
     return;
   }
-  $('#wellnessList').innerHTML = `<div class="wellness-list">${list.map(w => {
-    const avg = (w.sleep + w.fatigue + w.soreness + w.stress + w.mood) / 5;
-    return `<div class="wellness-item">
-      <div>${fmtDate(w.date)}</div>
-      <div>
-        <div style="display:flex;gap:6px;margin-bottom:6px">
-          ${WELLNESS_QUESTIONS.map(q => `<span class="tag" title="${q.label}: ${w[q.id]}/5">${q.label[0]}${w[q.id]}</span>`).join('')}
+  $('#wellnessList').innerHTML = `<div class="wellness-cards">${list.map(w => {
+    const avg = wellnessAvg(w);
+    const color = wellnessScoreColor(avg);
+    return `<div class="wcard">
+      <div class="wcard-head">
+        <div class="wcard-date">
+          <div class="wcard-day">${fmtDateShort(w.date)}</div>
+          <div class="wcard-year">${(w.date||'').slice(0,4)}</div>
         </div>
-        ${w.note?`<div class="text-mute">${w.note}</div>`:''}
+        <div class="wcard-score" style="color:${color}">${avg.toFixed(1)}<span class="wcard-score-max">/5</span></div>
+        <button class="btn-icon wcard-del" data-del="${w.date}" title="Supprimer">×</button>
       </div>
-      <div>
-        <div class="wellness-score" style="color:${avg>=4?'var(--accent)':avg>=3?'var(--warn)':'var(--danger)'}">${avg.toFixed(1)}</div>
-        <div class="scorebar"><div class="scorebar-fill" style="width:${avg/5*100}%"></div></div>
+      <div class="wcard-bars">
+        ${WELLNESS_QUESTIONS.map(q => `
+          <div class="wcard-bar" title="${q.label}: ${w[q.id]}/5">
+            <div class="wcard-bar-lbl">${WELLNESS_EMOJI[q.id][(w[q.id]||1)-1]}</div>
+            <div class="wcard-bar-track"><div class="wcard-bar-fill" style="width:${(w[q.id]||0)/5*100}%;background:${WELLNESS_COLORS[q.id]}"></div></div>
+            <div class="wcard-bar-val">${w[q.id]||'—'}</div>
+          </div>
+        `).join('')}
       </div>
-      <button class="btn-icon" data-del="${w.date}" title="Supprimer">×</button>
+      ${w.note?`<div class="wcard-note">📝 ${w.note}</div>`:''}
     </div>`;
   }).join('')}</div>`;
-  $$('#wellnessList [data-del]').forEach(b => b.addEventListener('click', () => {
+  $$('#wellnessList [data-del]').forEach(b => b.addEventListener('click', (e) => {
+    e.stopPropagation();
     A().wellness = A().wellness.filter(w => w.date !== b.dataset.del);
     saveState(); renderWellness();
   }));
