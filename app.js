@@ -235,18 +235,44 @@ function listenAthlete(athleteId) {
     }
     // Track si on a des items locaux que le cloud ignore (force un push après merge).
     let localHasExtra = false;
-    // Fusion sessions (union par clé unique)
+    // Compte les champs "significatifs" d'un objet (non vides / non-0).
+    // Sert à départager 2 versions d'un même item entre local et cloud : on
+    // garde la plus "remplie" (donc plus fraîche en pratique — un import Garmin
+    // ajoute beaucoup de champs à un slot qui n'en avait aucun).
+    const fillCount = o => {
+      if (!o || typeof o !== 'object') return 0;
+      let n = 0;
+      for (const k of Object.keys(o)) {
+        if (k === '_lastModTs') continue;
+        const v = o[k];
+        if (v == null || v === '' || v === 0) continue;
+        if (Array.isArray(v) && v.length === 0) continue;
+        n++;
+      }
+      return n;
+    };
+    // Fusion sessions : identité = (week, day, type). En cas de collision
+    // (même slot présent en local ET en cloud), on garde la version la plus
+    // remplie — ça évite qu'un enregistrement local vide n'écrase un édit
+    // fraichement fait sur un autre appareil.
     const localSessions = Array.isArray(localA.sessions) ? localA.sessions : [];
     const cloudSessions = Array.isArray(merged.sessions) ? merged.sessions : [];
     if (localSessions.length > 0 || cloudSessions.length > 0) {
-      const sessionKey = s => `${s.date||''}_${s.type||''}_${s.distance||0}_${s.duree||0}_${s.week||0}_${s.day||0}`;
+      const sessionKey = s => `${s.week||0}-${s.day||0}-${s.type||''}`;
       const map = new Map();
       localSessions.forEach(s => map.set(sessionKey(s), s));
       let newCount = 0;
-      cloudSessions.forEach(s => { const k = sessionKey(s); if (!map.has(k)) { map.set(k, s); newCount++; } });
+      cloudSessions.forEach(s => {
+        const k = sessionKey(s);
+        const cur = map.get(k);
+        if (!cur) { map.set(k, s); newCount++; }
+        else if (fillCount(s) > fillCount(cur)) { map.set(k, s); }
+      });
       merged.sessions = [...map.values()];
       if (newCount > 0) notifyNewSession(newCount);
-      if (merged.sessions.length > cloudSessions.length) localHasExtra = true;
+      // Détection push-back : local avait des slots que cloud n'a pas
+      const cloudKeys = new Set(cloudSessions.map(sessionKey));
+      if (localSessions.some(s => !cloudKeys.has(sessionKey(s)))) localHasExtra = true;
     }
     // Fusion wellness (union par date, version la plus complète gagne)
     const localWellness = Array.isArray(localA.wellness) ? localA.wellness : [];
@@ -266,11 +292,22 @@ function listenAthlete(athleteId) {
       merged.wellness = [...wmap.values()].sort((a, b) => (a.date || '').localeCompare(b.date || ''));
       if (merged.wellness.length > cloudWellness.length) localHasExtra = true;
     }
-    // Fusion done (union des clés, garde la version avec le plus de données)
+    // Fusion done : union par clé, mais pour chaque clé on garde la version
+    // avec le PLUS de champs remplis. Un import Garmin sur l'ordi ajoute
+    // date+distance+duree+vitesse+fcMoy+... à un slot qui n'avait rien : on
+    // veut que cette version l'emporte, PAS le vide local.
     const localDone = localA.done || {};
     const cloudDone = merged.done || {};
-    merged.done = { ...cloudDone, ...localDone };
-    if (Object.keys(merged.done).length > Object.keys(cloudDone).length) localHasExtra = true;
+    const mergedDone = {};
+    const doneKeys = new Set([...Object.keys(localDone), ...Object.keys(cloudDone)]);
+    doneKeys.forEach(k => {
+      const l = localDone[k], c = cloudDone[k];
+      if (!l) mergedDone[k] = c;
+      else if (!c) { mergedDone[k] = l; localHasExtra = true; }
+      else if (fillCount(l) >= fillCount(c)) mergedDone[k] = l;
+      else mergedDone[k] = c;
+    });
+    merged.done = mergedDone;
     // Fusion records (union par clé exercise+date)
     const localRecords = Array.isArray(localA.records) ? localA.records : [];
     const cloudRecords = Array.isArray(merged.records) ? merged.records : [];
